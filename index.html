@@ -7294,10 +7294,22 @@ async function pxInitConn() {
   pxConnReady = true;
 }
 
+// ── NEW-TAB SHORTCUTS stored in localStorage ─────────────────────
+const PX_NT_DEFAULT_SHORTCUTS = [
+  { name:'YouTube',  url:'https://www.youtube.com' },
+  { name:'TikTok',   url:'https://www.tiktok.com'  },
+  { name:'now.gg',   url:'https://now.gg'           },
+  { name:'Reddit',   url:'https://www.reddit.com'  },
+];
+function pxGetShortcuts() {
+  try { const s = localStorage.getItem('gyro_px_shortcuts'); return s ? JSON.parse(s) : PX_NT_DEFAULT_SHORTCUTS; }
+  catch { return PX_NT_DEFAULT_SHORTCUTS; }
+}
+function pxSaveShortcuts(arr) { localStorage.setItem('gyro_px_shortcuts', JSON.stringify(arr)); }
+
 function pxMakeNtBlob() {
   const eng = localStorage.getItem('gyro_px_engine') || 'duckduckgo';
   const safeEng = ['duckduckgo','brave'].includes(eng) ? eng : 'duckduckgo';
-  // Font mapping
   const fontKey = localStorage.getItem('gyro_font') || 'google-sans';
   const FONT_MAP = {
     'google-sans': { family:"'Google Sans','Product Sans',system-ui,sans-serif", gfUrl:"https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;600;700;800&display=swap" },
@@ -7308,120 +7320,120 @@ function pxMakeNtBlob() {
     'mono':        { family:"'DM Mono',monospace", gfUrl:"https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap" },
   };
   const font = FONT_MAP[fontKey] || FONT_MAP['google-sans'];
+  const shortcuts = pxGetShortcuts();
+  const shortcutsJson = JSON.stringify(shortcuts).replace(/</g,'\\u003c').replace(/>/g,'\\u003e');
+  const engLabel = safeEng === 'brave' ? 'Brave Search' : 'DuckDuckGo';
+
   const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>New Tab</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="${font.gfUrl}" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--acc:#4f9cf9;--acc2:#6dd5b0;--bg:#0d0f14;--surf:#13161e;--t1:#e8ecf4;--t2:#9ba3bb;--t3:#3d4260;--b0:rgba(255,255,255,.06);--b1:rgba(255,255,255,.10);--acc-glow:rgba(79,156,249,.22)}
+:root{--acc:#4f9cf9;--acc2:#6dd5b0;--bg:#0d0f14;--surf:#13161e;--t1:#e8ecf4;--t2:#9ba3bb;--t3:#5c6480;--b0:rgba(255,255,255,.06);--b1:rgba(255,255,255,.10);--b2:rgba(255,255,255,.18);--err:#f87171;--acc-glow:rgba(79,156,249,.22)}
+html{height:100%}
 body{
   display:flex;flex-direction:column;align-items:center;justify-content:center;
-  min-height:100vh;background:var(--bg);color:var(--t1);
+  min-height:100%;background:var(--bg);color:var(--t1);
   font-family:${font.family};
   background-image:
-    radial-gradient(ellipse 80% 55% at 50% -5%,rgba(79,156,249,.14),transparent),
+    radial-gradient(ellipse 80% 55% at 50% -5%,rgba(79,156,249,.13),transparent),
     radial-gradient(ellipse 50% 50% at 90% 90%,rgba(109,213,176,.07),transparent),
-    radial-gradient(circle,rgba(255,255,255,.022) 1px,transparent 1px);
+    radial-gradient(circle,rgba(255,255,255,.02) 1px,transparent 1px);
   background-size:auto,auto,28px 28px;
+  opacity:0;
+  /* Chrome-style: page fades in after paint — no jank, no scale flash */
+  transition:opacity .22s ease;
 }
-@keyframes nt-in{from{opacity:0;transform:translateY(18px) scale(.98)}to{opacity:1;transform:none}}
-@keyframes fadein{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+body.ready{opacity:1}
 @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
 @keyframes ring-spin-o{to{transform:rotate(360deg)}}
 @keyframes ring-spin-m{to{transform:rotate(-360deg)}}
-body>*{animation:nt-in .45s cubic-bezier(.22,1,.36,1) both}
-body>.logo-wrap{animation-delay:0s}
-body>.search-wrap{animation-delay:.06s}
-body>.shortcuts{animation-delay:.12s}
-.logo-wrap{
-  display:flex;flex-direction:column;align-items:center;gap:10px;
-  margin-bottom:32px;
-}
+@keyframes slide-up{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.logo-wrap{display:flex;flex-direction:column;align-items:center;gap:10px;margin-bottom:32px;animation:slide-up .38s .04s cubic-bezier(.22,1,.36,1) both}
 .logo-svg{animation:float 4.5s ease-in-out infinite}
-.logo-svg svg .ring-o{transform-origin:26px 26px;animation:ring-spin-o 9s linear infinite}
-.logo-svg svg .ring-m{transform-origin:26px 26px;animation:ring-spin-m 6s linear infinite}
-.logo-svg svg .ring-i{transform-origin:26px 26px;animation:ring-spin-o 18s linear infinite}
-.logo-text{
-  font-size:1.5rem;font-weight:800;letter-spacing:-.4px;
-  background:linear-gradient(135deg,var(--acc),var(--acc2));
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
-  font-family:${font.family};
-}
-.logo-sub{font-size:.62rem;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;font-family:${font.family};}
-.search-wrap{
-  width:100%;max-width:520px;padding:0 20px;margin-bottom:28px;
-}
+.ring-o{transform-origin:26px 26px;animation:ring-spin-o 9s linear infinite}
+.ring-m{transform-origin:26px 26px;animation:ring-spin-m 6s linear infinite}
+.ring-i{transform-origin:26px 26px;animation:ring-spin-o 20s linear infinite}
+.logo-text{font-size:1.5rem;font-weight:800;letter-spacing:-.4px;background:linear-gradient(135deg,var(--acc),var(--acc2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-family:${font.family}}
+.logo-sub{font-size:.62rem;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;font-family:${font.family}}
+.search-wrap{width:100%;max-width:520px;padding:0 20px;margin-bottom:28px;animation:slide-up .38s .10s cubic-bezier(.22,1,.36,1) both}
 .search-box{
   display:flex;align-items:center;gap:10px;
-  background:rgba(255,255,255,.038);
-  border:1.5px solid var(--b1);border-radius:18px;padding:12px 16px;
-  transition:border-color .25s,box-shadow .25s,background .25s;
-  cursor:text;
+  background:rgba(255,255,255,.04);border:1.5px solid var(--b1);border-radius:18px;padding:11px 16px;
+  cursor:text;transition:border-color .2s,box-shadow .2s,background .2s;
 }
-.search-box:focus-within{
-  border-color:rgba(79,156,249,.5);
-  box-shadow:0 0 0 3px rgba(79,156,249,.09),0 0 20px rgba(79,156,249,.08);
-  background:rgba(255,255,255,.055);
-}
-.search-icon{color:var(--t3);flex-shrink:0;transition:color .25s}
+.search-box:focus-within{border-color:rgba(79,156,249,.5);box-shadow:0 0 0 3px rgba(79,156,249,.09);background:rgba(255,255,255,.055)}
+.search-icon{color:var(--t3);flex-shrink:0;transition:color .2s}
 .search-box:focus-within .search-icon{color:var(--acc)}
 .search-icon svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
-.search-input{
-  flex:1;background:transparent;border:none;outline:none;
-  color:var(--t1);font-size:.97rem;font-family:${font.family};
-}
+.search-input{flex:1;background:transparent;border:none;outline:none;color:var(--t1);font-size:.97rem;font-family:${font.family};caret-color:var(--acc)}
 .search-input::placeholder{color:var(--t3)}
-.engine-badge{
-  display:flex;align-items:center;gap:5px;padding:4px 10px;
-  border-radius:8px;background:rgba(79,156,249,.1);border:1px solid rgba(79,156,249,.2);
-  font-size:.68rem;font-weight:700;color:var(--acc);letter-spacing:.04em;
-  white-space:nowrap;flex-shrink:0;font-family:${font.family};
-  transition:all .25s;
-}
+.engine-badge{padding:4px 10px;border-radius:8px;background:rgba(79,156,249,.1);border:1px solid rgba(79,156,249,.2);font-size:.68rem;font-weight:700;color:var(--acc);white-space:nowrap;flex-shrink:0;font-family:${font.family};transition:all .2s}
 .search-box:focus-within .engine-badge{background:rgba(79,156,249,.18);border-color:rgba(79,156,249,.4)}
-.shortcuts{
-  display:grid;grid-template-columns:repeat(4,1fr);gap:10px;
-  width:100%;max-width:420px;padding:0 20px;
-}
+/* shortcuts grid */
+.shortcuts-section{width:100%;max-width:520px;padding:0 20px;animation:slide-up .38s .16s cubic-bezier(.22,1,.36,1) both}
+.shortcuts{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:10px}
 .shortcut{
-  display:flex;flex-direction:column;align-items:center;gap:7px;padding:14px 8px;
-  border-radius:16px;
-  background:rgba(255,255,255,.028);border:1px solid rgba(255,255,255,.055);
-  cursor:pointer;text-decoration:none;color:inherit;
-  transition:background .25s cubic-bezier(.4,0,.2,1),border-color .25s,transform .25s cubic-bezier(.4,0,.2,1),box-shadow .25s;
-  user-select:none;position:relative;overflow:hidden;
+  display:flex;flex-direction:column;align-items:center;gap:7px;padding:13px 6px;
+  border-radius:14px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.055);
+  cursor:pointer;user-select:none;position:relative;overflow:hidden;
+  transition:background .2s,border-color .2s,transform .2s cubic-bezier(.34,1.56,.64,1),box-shadow .2s;
 }
-.shortcut::before{
-  content:'';position:absolute;inset:0;
-  background:radial-gradient(ellipse 80% 60% at 50% 0%,rgba(79,156,249,.12),transparent);
-  opacity:0;transition:opacity .25s;
-}
+.shortcut::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 80% 60% at 50% 0%,rgba(79,156,249,.13),transparent);opacity:0;transition:opacity .2s}
 .shortcut:hover::before{opacity:1}
-.shortcut:hover{
-  background:rgba(79,156,249,.07);
-  border-color:rgba(79,156,249,.3);
-  transform:translateY(-3px);
-  box-shadow:0 8px 24px rgba(0,0,0,.3),0 0 0 1px rgba(79,156,249,.2);
-}
+.shortcut:hover{background:rgba(79,156,249,.07);border-color:rgba(79,156,249,.3);transform:translateY(-3px);box-shadow:0 8px 22px rgba(0,0,0,.28)}
 .shortcut:active{transform:translateY(-1px);transition-duration:.08s}
-.shortcut-icon{
-  width:38px;height:38px;border-radius:11px;overflow:hidden;
-  background:rgba(255,255,255,.06);
-  display:flex;align-items:center;justify-content:center;flex-shrink:0;
-  transition:transform .25s cubic-bezier(.4,0,.2,1);
-}
+.shortcut-icon{width:36px;height:36px;border-radius:10px;overflow:hidden;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;transition:transform .2s cubic-bezier(.34,1.56,.64,1)}
 .shortcut:hover .shortcut-icon{transform:scale(1.1)}
-.shortcut-icon img{width:28px;height:28px;object-fit:contain;display:block}
-.shortcut-label{
-  font-size:.64rem;font-weight:600;color:var(--t3);
-  text-align:center;white-space:nowrap;
-  font-family:${font.family};transition:color .25s;
-}
+.shortcut-icon img{width:26px;height:26px;object-fit:contain;display:block}
+.shortcut-label{font-size:.6rem;font-weight:600;color:var(--t3);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60px;font-family:${font.family};transition:color .2s}
 .shortcut:hover .shortcut-label{color:var(--t2)}
+/* add shortcut tile */
+.sc-add{
+  display:flex;flex-direction:column;align-items:center;gap:7px;padding:13px 6px;
+  border-radius:14px;border:1.5px dashed rgba(255,255,255,.12);
+  cursor:pointer;user-select:none;transition:border-color .2s,background .2s,transform .2s;
+}
+.sc-add:hover{border-color:rgba(79,156,249,.45);background:rgba(79,156,249,.05);transform:translateY(-2px)}
+.sc-add:active{transform:translateY(0)}
+.sc-add-icon{width:36px;height:36px;border-radius:10px;background:rgba(255,255,255,.05);display:flex;align-items:center;justify-content:center;color:var(--t3);transition:color .2s,background .2s}
+.sc-add:hover .sc-add-icon{background:rgba(79,156,249,.12);color:var(--acc)}
+.sc-add-icon svg{width:16px;height:16px;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;fill:none}
+.sc-add-label{font-size:.6rem;font-weight:600;color:var(--t3);font-family:${font.family};transition:color .2s}
+.sc-add:hover .sc-add-label{color:var(--acc)}
+/* remove button on shortcuts */
+.sc-del{
+  position:absolute;top:4px;right:4px;width:16px;height:16px;
+  border-radius:50%;background:rgba(248,113,113,.18);border:none;
+  color:var(--err);font-size:10px;line-height:1;cursor:pointer;
+  display:none;align-items:center;justify-content:center;
+  transition:background .15s;font-family:sans-serif;
+}
+.shortcut:hover .sc-del{display:flex}
+.sc-del:hover{background:rgba(248,113,113,.38)}
+/* modal */
+.sc-modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);align-items:center;justify-content:center;z-index:999;animation:none}
+.sc-modal-bg.open{display:flex;animation:modal-bg-in .18s ease}
+@keyframes modal-bg-in{from{opacity:0}to{opacity:1}}
+.sc-modal{background:#13161e;border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:24px;width:300px;box-shadow:0 24px 64px rgba(0,0,0,.7);animation:modal-in .22s cubic-bezier(.22,1,.36,1)}
+@keyframes modal-in{from{opacity:0;transform:scale(.94) translateY(8px)}to{opacity:1;transform:none}}
+.sc-modal h3{font-size:.95rem;font-weight:800;color:var(--t1);margin-bottom:18px;font-family:${font.family}}
+.sc-field{margin-bottom:12px}
+.sc-field label{display:block;font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);margin-bottom:5px;font-family:${font.family}}
+.sc-input{width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:9px 12px;color:var(--t1);font-family:${font.family};font-size:.88rem;outline:none;transition:border-color .15s,box-shadow .15s}
+.sc-input:focus{border-color:rgba(79,156,249,.5);box-shadow:0 0 0 3px rgba(79,156,249,.1)}
+.sc-input::placeholder{color:var(--t3)}
+.sc-btns{display:flex;gap:8px;margin-top:18px}
+.sc-btn{flex:1;padding:9px 0;border-radius:10px;font-family:${font.family};font-size:.84rem;font-weight:700;cursor:pointer;border:none;transition:all .15s}
+.sc-btn.primary{background:var(--acc);color:#fff;box-shadow:0 2px 10px rgba(79,156,249,.3)}
+.sc-btn.primary:hover{filter:brightness(1.1);transform:translateY(-1px)}
+.sc-btn.cancel{background:rgba(255,255,255,.07);color:var(--t2);border:1px solid rgba(255,255,255,.1)}
+.sc-btn.cancel:hover{background:rgba(255,255,255,.12);color:var(--t1)}
+.sc-err{font-size:.72rem;color:var(--err);margin-top:6px;min-height:16px;font-family:${font.family}}
 </style></head><body>
 <div class="logo-wrap">
   <div class="logo-svg">
-    <svg width="56" height="56" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <svg width="56" height="56" viewBox="0 0 52 52" fill="none">
       <defs>
         <linearGradient id="ntg1" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#4f9cf9"/><stop offset="100%" stop-color="#6dd5b0"/></linearGradient>
         <linearGradient id="ntg2" x1="100%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#6dd5b0"/><stop offset="100%" stop-color="#4f9cf9"/></linearGradient>
@@ -7436,43 +7448,134 @@ body>.shortcuts{animation-delay:.12s}
   <div class="logo-sub">Private Browsing</div>
 </div>
 <div class="search-wrap">
-  <div class="search-box" onclick="document.getElementById('q').focus()">
+  <div class="search-box" id="search-box">
     <span class="search-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
     <input id="q" class="search-input" placeholder="Search or enter a URL\u2026" autocomplete="off" spellcheck="false" autofocus>
-    <div class="engine-badge">${safeEng === 'brave' ? 'Brave Search' : 'DuckDuckGo'}</div>
+    <div class="engine-badge">${engLabel}</div>
   </div>
 </div>
-<div class="shortcuts">
-  <div class="shortcut" onclick="navTo('https://www.youtube.com')">
-    <div class="shortcut-icon"><img src="https://www.google.com/s2/favicons?domain=youtube.com&sz=64" alt=""/></div>
-    <span class="shortcut-label">YouTube</span>
-  </div>
-  <div class="shortcut" onclick="navTo('https://www.tiktok.com')">
-    <div class="shortcut-icon"><img src="https://www.google.com/s2/favicons?domain=tiktok.com&sz=64" alt=""/></div>
-    <span class="shortcut-label">TikTok</span>
-  </div>
-  <div class="shortcut" onclick="navTo('https://now.gg')">
-    <div class="shortcut-icon"><img src="https://www.google.com/s2/favicons?domain=now.gg&sz=64" alt=""/></div>
-    <span class="shortcut-label">now.gg</span>
-  </div>
-  <div class="shortcut" onclick="navTo('https://www.reddit.com')">
-    <div class="shortcut-icon"><img src="https://www.google.com/s2/favicons?domain=reddit.com&sz=64" alt=""/></div>
-    <span class="shortcut-label">Reddit</span>
+<div class="shortcuts-section">
+  <div class="shortcuts" id="shortcuts-grid"></div>
+</div>
+<!-- Add shortcut modal -->
+<div class="sc-modal-bg" id="sc-modal-bg">
+  <div class="sc-modal">
+    <h3>Add shortcut</h3>
+    <div class="sc-field">
+      <label>Name</label>
+      <input class="sc-input" id="sc-name" placeholder="e.g. YouTube" maxlength="15" autocomplete="off" spellcheck="false"/>
+    </div>
+    <div class="sc-field">
+      <label>URL</label>
+      <input class="sc-input" id="sc-url" placeholder="e.g. https://youtube.com" autocomplete="off" spellcheck="false"/>
+    </div>
+    <div class="sc-err" id="sc-err"></div>
+    <div class="sc-btns">
+      <button class="sc-btn cancel" id="sc-cancel">Cancel</button>
+      <button class="sc-btn primary" id="sc-save">Add</button>
+    </div>
   </div>
 </div>
 <script>
+var SHORTCUTS = ${shortcutsJson};
+var MAX = 10;
+
+function send(type, url){ try{ if(window.parent&&window.parent!==window){ window.parent.postMessage({type:type,url:url},'*'); return true; } }catch(e){} return false; }
+
 function navTo(url){
-  try{if(window.parent&&window.parent!==window){window.parent.postMessage({type:'pxNavigate',url:url},'*');return;}}catch(e){}
-  window.location.href=url;
+  if(!send('pxNavigate',url)){ window.location.href=url; }
 }
-document.getElementById('q').addEventListener('keydown',function(e){
-  if(e.key!=='Enter')return;
-  var v=this.value.trim();
-  if(!v)return;
-  try{if(window.parent&&window.parent!==window){window.parent.postMessage({type:'pxNavigate',url:v},'*');return;}}catch(err){}
-  var isUrl=/^https?:\/\//.test(v)||(/^[a-z0-9-]+(\.[a-z]{2,})(\/|$)/i.test(v)&&v.indexOf(' ')===-1);
-  window.location.href=isUrl?(/^https?:\/\//.test(v)?v:'https://'+v):'https://duckduckgo.com/?q='+encodeURIComponent(v);
+
+function getHostname(url){
+  try{ return new URL(url).hostname; }catch(e){ return url.replace(/^https?:\/\//,'').split('/')[0]; }
+}
+
+function renderShortcuts(){
+  var g = document.getElementById('shortcuts-grid');
+  g.innerHTML = '';
+  SHORTCUTS.forEach(function(sc, i){
+    var host = getHostname(sc.url);
+    var el = document.createElement('div');
+    el.className = 'shortcut';
+    el.innerHTML = '<div class="shortcut-icon"><img src="https://www.google.com/s2/favicons?domain='+encodeURIComponent(host)+'&sz=64" onerror="this.style.opacity=\\'0.3\\'" alt=""/></div>'
+      +'<span class="shortcut-label">'+escHtml(sc.name)+'</span>'
+      +'<button class="sc-del" title="Remove">\\u00d7</button>';
+    el.addEventListener('click', function(e){ if(!e.target.classList.contains('sc-del')){ navTo(sc.url); } });
+    el.querySelector('.sc-del').addEventListener('click', function(e){ e.stopPropagation(); removeShortcut(i); });
+    g.appendChild(el);
+  });
+  if(SHORTCUTS.length < MAX){
+    var add = document.createElement('div');
+    add.className = 'sc-add';
+    add.innerHTML = '<div class="sc-add-icon"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div><span class="sc-add-label">Add</span>';
+    add.addEventListener('click', openModal);
+    g.appendChild(add);
+  }
+}
+
+function removeShortcut(i){
+  SHORTCUTS.splice(i,1);
+  saveAndSync();
+  renderShortcuts();
+}
+
+function saveAndSync(){
+  // Sync back to parent so next NT blob regeneration picks them up
+  send('pxSaveShortcuts', JSON.stringify(SHORTCUTS));
+}
+
+function openModal(){
+  document.getElementById('sc-name').value='';
+  document.getElementById('sc-url').value='';
+  document.getElementById('sc-err').textContent='';
+  document.getElementById('sc-modal-bg').classList.add('open');
+  setTimeout(function(){ document.getElementById('sc-name').focus(); }, 80);
+}
+function closeModal(){ document.getElementById('sc-modal-bg').classList.remove('open'); }
+
+function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+document.getElementById('sc-cancel').addEventListener('click', closeModal);
+document.getElementById('sc-modal-bg').addEventListener('click', function(e){ if(e.target===this) closeModal(); });
+
+document.getElementById('sc-save').addEventListener('click', function(){
+  var name = document.getElementById('sc-name').value.trim();
+  var url  = document.getElementById('sc-url').value.trim();
+  var err  = document.getElementById('sc-err');
+  err.textContent = '';
+  if(!name){ err.textContent='Enter a name.'; return; }
+  if(!url){ err.textContent='Enter a URL.'; return; }
+  if(!/^https?:\\/\\//.test(url)) url='https://'+url;
+  try{ new URL(url); }catch(e){ err.textContent='That URL looks invalid.'; return; }
+  if(SHORTCUTS.length>=MAX){ err.textContent='Max '+MAX+' shortcuts.'; return; }
+  SHORTCUTS.push({name:name,url:url});
+  saveAndSync();
+  renderShortcuts();
+  closeModal();
 });
+
+// Enter key in modal fields
+['sc-name','sc-url'].forEach(function(id){
+  document.getElementById(id).addEventListener('keydown',function(e){ if(e.key==='Enter') document.getElementById('sc-save').click(); });
+});
+
+// Address-bar-identical search logic — posted to parent which runs pxNavigate
+document.getElementById('q').addEventListener('keydown', function(e){
+  if(e.key !== 'Enter') return;
+  e.preventDefault();
+  var v = this.value.trim();
+  if(!v) return;
+  navTo(v);
+  this.value = '';
+});
+
+// Click search box to focus
+document.getElementById('search-box').addEventListener('click', function(){ document.getElementById('q').focus(); });
+
+// Fade body in after first paint — Chrome-style, no layout flash
+requestAnimationFrame(function(){ requestAnimationFrame(function(){ document.body.classList.add('ready'); }); });
+
+renderShortcuts();
 <\/script></body></html>`;
   return URL.createObjectURL(new Blob([html], { type: 'text/html' }));
 }
@@ -7517,7 +7620,18 @@ function pxBuildUI() {
   bar.addEventListener('focus', () => bar.select());
   bar.addEventListener('click', e => e.stopPropagation());
 
-  window.addEventListener('message', e => { if (e.data?.type === 'pxNavigate') pxNavigate(e.data.url); });
+  window.addEventListener('message', e => {
+    if (e.data?.type === 'pxNavigate') pxNavigate(e.data.url);
+    if (e.data?.type === 'pxSaveShortcuts') {
+      try {
+        const arr = JSON.parse(e.data.url);
+        pxSaveShortcuts(arr);
+        // Regenerate blob so future new tabs use updated shortcuts
+        if (window.__pxNtBlobUrl) { try { URL.revokeObjectURL(window.__pxNtBlobUrl); } catch(err){} }
+        window.__pxNtBlobUrl = pxMakeNtBlob();
+      } catch(err) {}
+    }
+  });
   pxCreateTab(true);
 }
 
