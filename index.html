@@ -7220,11 +7220,13 @@ function pxLoadScripts() {
 }
 
 const PX_WISP_SERVERS = [
-  { name: 'Wisp 1', url: 'wss://glseries.net/wisp/' },
-  { name: 'Wisp 2', url: 'wss://wispserver.dev/wisp/' },
-  { name: 'Wisp 3', url: 'wss://seminar.drama.english.assignment.literature.homebrewer.org/wisp/' },
-  { name: 'Wisp 4', url: 'wss://admin.proxy.hydrovolter.com/scramjet/wisp/' },
-  { name: 'Wisp 5', url: 'wss://scram.owoellen.rocks/wisp/' },
+  { name: 'Titanium',     url: 'wss://titaniumnetwork.org/wisp/' },
+  { name: 'Holy Unblocker', url: 'wss://holyubofficial.net/wisp/' },
+  { name: 'Interstellar', url: 'wss://interstellar.lawsj.xyz/wisp/' },
+  { name: 'Radon Games',  url: 'wss://radon.games/wisp/' },
+  { name: 'Pyro',         url: 'wss://pyro.works/wisp/' },
+  { name: 'AstroProxy',   url: 'wss://astro.owliber.net/wisp/' },
+  { name: 'Hydrovolter',  url: 'wss://admin.proxy.hydrovolter.com/scramjet/wisp/' },
 ];
 
 let pxScramjet = null, pxConnReady = false;
@@ -7237,7 +7239,7 @@ const pxGetBasePath = () => {
 const pxGetStoredWisps = () => { try { return window.__pxWispsCache || []; } catch { return []; } };
 const pxAllServers = () => [...PX_WISP_SERVERS, ...pxGetStoredWisps()];
 const pxGetActive = () => pxTabs.find(t => t.id === pxActiveId);
-const PX_DEFAULT_WISP = PX_WISP_SERVERS[0].url;
+const PX_DEFAULT_WISP = PX_WISP_SERVERS[0].url; // Titanium
 
 async function pxPing(url, timeout = 2500) {
   return new Promise(resolve => {
@@ -7606,6 +7608,9 @@ function pxBuildUI() {
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
         </button>
       </div>
+      <button class="px-nav-btn" id="px-server-btn" title="Switch Proxy Server" onclick="pxOpenSettings()">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+      </button>
     </div>
     <div id="px-load-bar-wrap"><div id="px-load-bar"></div></div>
     <div id="px-frames"></div>`;
@@ -7625,13 +7630,17 @@ function pxBuildUI() {
   bar.addEventListener('focus', () => bar.select());
   bar.addEventListener('click', e => e.stopPropagation());
 
+  // Set up message listener BEFORE creating the first tab
+  // so search/navigation from the new-tab srcdoc page works immediately
   window.addEventListener('message', e => {
-    if (e.data?.type === 'pxNavigate') pxNavigate(e.data.url);
+    if (e.data?.type === 'pxNavigate') {
+      const input = (e.data.url || '').trim();
+      if (input) pxNavigate(input);
+    }
     if (e.data?.type === 'pxSaveShortcuts') {
       try {
         const arr = JSON.parse(e.data.url);
         pxSaveShortcuts(arr);
-        // Regenerate blob so future new tabs use updated shortcuts
         window.__pxNtHtml = pxMakeNtHtml();
       } catch(err) {}
     }
@@ -7653,9 +7662,10 @@ function pxNavFwd() {
 }
 function pxGoNt(t) {
   if (!t) return;
-  // Always use the latest blob (regenerated when engine changes)
-  t.frame.frame.srcdoc = window.__pxNtHtml || '';
+  t.loading = false;
   t.title = 'New Tab'; t.url = ''; t.favicon = null;
+  t.frame.frame.srcdoc = window.__pxNtHtml || '';
+  if (t.id === pxActiveId) pxSetLoading(false);
   pxRenderTabs(); pxUpdateAddr();
 }
 const PX_SEARCH_ENGINES = {
@@ -7685,17 +7695,21 @@ function pxCreateTab(activate = true) {
     loading: false, favicon: null,
     hist: ['nt'], hi: 0, _nav: false, _skipT: null, _fallT: null
   };
-  frame.frame.srcdoc = window.__pxNtHtml || '';
-  frame.addEventListener('urlchange', e => pxOnUrl(t, e.url));
+  // Set srcdoc — no urlchange event fires for srcdoc, load event handles it
   frame.frame.addEventListener('load', () => pxOnLoad(t));
-  pxTabs.push(t);
+  frame.addEventListener('urlchange', e => pxOnUrl(t, e.url));
   frame.frame.setAttribute('referrerpolicy', 'no-referrer');
   document.getElementById('px-frames').appendChild(frame.frame);
+  // Set srcdoc AFTER appending so load event fires correctly
+  frame.frame.srcdoc = window.__pxNtHtml || '';
+  pxTabs.push(t);
   if (activate) pxSwitchTab(t.id);
   return t;
 }
 
 function pxOnUrl(t, url) {
+  // Ignore srcdoc/blank internal URLs
+  if (!url || url === 'about:srcdoc' || url === 'about:blank') return;
   t.url = url;
   if (!t._nav) { t.hist = t.hist.slice(0, t.hi + 1); t.hist.push(url); t.hi = t.hist.length - 1; }
   t.loading = true;
@@ -7704,16 +7718,21 @@ function pxOnUrl(t, url) {
   catch { t.title = 'Browsing'; t.favicon = null; }
   pxRenderTabs(); pxSetLoadBar(15);
   clearTimeout(t._fallT);
-  t._fallT = setTimeout(() => { if(t.loading){t.loading=false;if(t.id===pxActiveId)pxSetLoading(false);pxRenderTabs();pxSetLoadBar(100);} }, 3000);
+  // 15s timeout before giving up on loading state
+  t._fallT = setTimeout(() => { if(t.loading){t.loading=false;if(t.id===pxActiveId){pxSetLoading(false);pxSetLoadBar(100);}pxRenderTabs();} }, 15000);
 }
 
 function pxOnLoad(t) {
   t.loading = false; clearTimeout(t._skipT); clearTimeout(t._fallT);
-  if (t.id === pxActiveId) pxSetLoading(false);
-  try { const title = t.frame.frame.contentWindow.document.title; if(title) t.title = title; } catch {}
-  const href = t.frame.frame.contentWindow?.location?.href || '';
-  if (!href || href === 'about:srcdoc' || href.includes('NT.html')) { t.title='New Tab'; t.url=''; t.favicon=null; }
-  pxRenderTabs(); pxUpdateAddr(); pxSetLoadBar(100);
+  if (t.id === pxActiveId) { pxSetLoading(false); pxSetLoadBar(100); }
+  try { const title = t.frame.frame.contentWindow.document.title; if(title && title !== 'New Tab') t.title = title; } catch {}
+  // srcdoc new tab: href will be 'about:srcdoc' or blank
+  let href = '';
+  try { href = t.frame.frame.contentWindow?.location?.href || ''; } catch {}
+  if (!href || href === 'about:srcdoc' || href === 'about:blank' || href.includes('NT.html')) {
+    t.title = 'New Tab'; t.url = ''; t.favicon = null;
+  }
+  pxRenderTabs(); pxUpdateAddr();
 }
 
 function pxSwitchTab(id) {
@@ -7797,7 +7816,7 @@ function pxRenderEngines() {
       pxTabs.forEach(t => {
         if (!t.frame || !t.frame.frame) return;
         if (!t.url || t.title === 'New Tab') {
-          t.frame.frame.src = freshBlob;
+          t.frame.frame.srcdoc = window.__pxNtHtml || '';
           t.url = '';
         }
       });
@@ -7890,7 +7909,9 @@ async function proxyInit() {
     if (eng) { pxSearchEngine = eng; window.__pxEngineCache = eng; }
     else window.__pxEngineCache = 'duckduckgo';
     window.__pxWispsCache = wisps ? JSON.parse(wisps) : [];
-    window.__pxWispCache = wisp || null;
+    // Clear cached wisp if it was one of the old dead servers
+    const _deadServers = ['wss://glseries.net/wisp/', 'wss://wispserver.dev/wisp/', 'wss://seminar.drama.english.assignment.literature.homebrewer.org/wisp/', 'wss://scram.owoellen.rocks/wisp/'];
+    window.__pxWispCache = (wisp && !_deadServers.includes(wisp)) ? wisp : null;
     window.__pxShortcutsCache = shortcuts ? JSON.parse(shortcuts) : null;
     window.__pxFontCache = font || 'google-sans';
   } catch(e) {
@@ -7978,12 +7999,25 @@ async function proxyInit() {
     pxBuildUI();
   } catch (err) {
     console.error('[Gyro Proxy] Init failed:', err);
+    // Build server options for the error screen
+    const _allS = pxAllServers();
+    const _serverOpts = _allS.map(s =>
+      `<button onclick="window.__pxWispCache='${s.url}';DB.setMisc('gyro_px_wisp','${s.url}').catch(()=>{});proxyBooted=false;proxyInit()"
+        style="padding:7px 14px;background:var(--elev);border:1px solid var(--b1);border-radius:8px;color:var(--t2);font-family:var(--font);font-size:.78rem;cursor:pointer;text-align:left;transition:all .15s"
+        onmouseover="this.style.borderColor='var(--acc)';this.style.color='var(--t1)'"
+        onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)'"
+      >${s.name} <span style="opacity:.5;font-size:.7rem">${s.url.replace('wss://','').slice(0,28)}…</span></button>`
+    ).join('');
     mount.innerHTML = `
       <div style="display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:40px;text-align:center;background:var(--bg)">
         <div style="font-size:2rem">⚠️</div>
         <div style="font-size:1rem;font-weight:700;color:var(--t1)">Proxy Failed to Start</div>
-        <div style="font-size:.84rem;color:var(--t2);max-width:380px;line-height:1.7">${err.message||'Unknown error. Open the browser console (F12) for details.'}</div>
-        <button onclick="proxyBooted=false;proxyInit()" style="padding:9px 24px;background:var(--acc);border:none;border-radius:10px;color:#fff;font-family:var(--font);font-size:.84rem;font-weight:700;cursor:pointer">Retry</button>
+        <div style="font-size:.84rem;color:var(--t2);max-width:380px;line-height:1.7">${err.message||'Connection failed — the wisp server may be offline.'}</div>
+        <div style="font-size:.8rem;font-weight:700;color:var(--t3);letter-spacing:.06em;text-transform:uppercase;margin-top:4px">Try a different server</div>
+        <div style="display:flex;flex-direction:column;gap:6px;width:100%;max-width:340px;text-align:left">${_serverOpts}</div>
+        <div style="display:flex;gap:10px;margin-top:4px">
+          <button onclick="proxyBooted=false;proxyInit()" style="padding:9px 24px;background:var(--acc);border:none;border-radius:10px;color:#fff;font-family:var(--font);font-size:.84rem;font-weight:700;cursor:pointer">Retry</button>
+        </div>
       </div>`;
   }
 }
