@@ -1137,12 +1137,14 @@
     }
 
     /* ── PROXY ANIMATIONS ─────────────────────────────────────── */
-    @keyframes px-tab-in{from{opacity:0;transform:translateY(-6px) scaleX(.94)}to{opacity:1;transform:none}}
-    @keyframes px-frame-in{from{opacity:0;transform:scale(.99)}to{opacity:1;transform:none}}
-    @keyframes px-load-pulse{0%,100%{box-shadow:0 0 8px var(--acc-glow)}50%{box-shadow:0 0 18px var(--acc-glow),0 0 4px var(--acc)}}
-    .px-tab{animation:px-tab-in .25s cubic-bezier(.22,1,.36,1) both}
-    #px-frames iframe{animation:px-frame-in .35s cubic-bezier(.22,1,.36,1)}
-    #px-frames iframe.px-loading{animation:none;filter:blur(6px) saturate(.7);transition:filter .45s cubic-bezier(.4,0,.2,1),opacity .45s ease}
+    /* Tab appear: clean opacity fade, no scale/translate jank */
+    @keyframes px-tab-in{from{opacity:0}to{opacity:1}}
+    .px-tab{animation:px-tab-in .18s ease both}
+    /* iframe: no animation — instant display, content fades via loading blur */
+    #px-frames iframe{animation:none}
+    /* Loading blur: smooth in/out on the page content */
+    #px-frames iframe.px-loading{filter:blur(8px) saturate(.6);transition:filter .3s cubic-bezier(.4,0,.2,1)}
+    #px-frames iframe:not(.px-loading){filter:none;transition:filter .25s cubic-bezier(.4,0,.2,1)}
     #px-load-bar{
       height:100%;width:0%;background:linear-gradient(90deg,var(--acc),var(--acc2),var(--acc));
       background-size:200% 100%;
@@ -2783,19 +2785,23 @@ const DB={
   async open(){
     if(this._db)return this._db;
     return new Promise((res,rej)=>{
-      const req=indexedDB.open('gyro_v4_db',2);
+      const req=indexedDB.open('gyro_v4_db',3);
       req.onupgradeneeded=e=>{
         const db=e.target.result;
         if(!db.objectStoreNames.contains('state'))db.createObjectStore('state');
         if(!db.objectStoreNames.contains('memories'))db.createObjectStore('memories',{keyPath:'id'});
+        if(!db.objectStoreNames.contains('misc'))db.createObjectStore('misc');
       };
       req.onsuccess=e=>{this._db=e.target.result;res(this._db)};
       req.onerror=e=>rej(e.target.error);
     });
   },
-  async get(k){const db=await this.open();return new Promise((r,j)=>{const q=db.transaction('state','readonly').objectStore('state').get(k);q.onsuccess=()=>r(q.result);q.onerror=e=>j(e.target.error)})},
+  async get(k){const db=await this.open();return new Promise((r,j)=>{const q=db.transaction('state','readonly').objectStore('state').get(k);q.onsuccess=()=>r(q.result??null);q.onerror=e=>j(e.target.error)})},
   async set(k,v){const db=await this.open();return new Promise((r,j)=>{const q=db.transaction('state','readwrite').objectStore('state').put(v,k);q.onsuccess=()=>r();q.onerror=e=>j(e.target.error)})},
   async del(k){const db=await this.open();return new Promise((r,j)=>{const q=db.transaction('state','readwrite').objectStore('state').delete(k);q.onsuccess=()=>r();q.onerror=e=>j(e.target.error)})},
+  async getMisc(k){const db=await this.open();return new Promise((r,j)=>{const q=db.transaction('misc','readonly').objectStore('misc').get(k);q.onsuccess=()=>r(q.result??null);q.onerror=e=>j(e.target.error)})},
+  async setMisc(k,v){const db=await this.open();return new Promise((r,j)=>{const q=db.transaction('misc','readwrite').objectStore('misc').put(v,k);q.onsuccess=()=>r();q.onerror=e=>j(e.target.error)})},
+  async delMisc(k){const db=await this.open();return new Promise((r,j)=>{const q=db.transaction('misc','readwrite').objectStore('misc').delete(k);q.onsuccess=()=>r();q.onerror=e=>j(e.target.error)})},
   async getAllMem(){const db=await this.open();return new Promise((r,j)=>{const q=db.transaction('memories','readonly').objectStore('memories').getAll();q.onsuccess=()=>r(q.result||[]);q.onerror=e=>j(e.target.error)})},
   async putMem(m){const db=await this.open();return new Promise((r,j)=>{const q=db.transaction('memories','readwrite').objectStore('memories').put(m);q.onsuccess=()=>r();q.onerror=e=>j(e.target.error)})},
   async delMem(id){const db=await this.open();return new Promise((r,j)=>{const q=db.transaction('memories','readwrite').objectStore('memories').delete(id);q.onsuccess=()=>r();q.onerror=e=>j(e.target.error)})},
@@ -2945,16 +2951,14 @@ function updateLogos(){
 }
 function applyFont(f){
   currentFont=f;htmlEl.setAttribute('data-font',f);
-  localStorage.setItem('gyro_font', f);
+  DB.setMisc('gyro_font', f).catch(()=>{});
   if(f==='inter'&&!document.getElementById('font-inter')){const l=document.createElement('link');l.id='font-inter';l.rel='stylesheet';l.href='https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap';document.head.appendChild(l)}
   if(f==='roboto'&&!document.getElementById('font-roboto')){const l=document.createElement('link');l.id='font-roboto';l.rel='stylesheet';l.href='https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap';document.head.appendChild(l)}
   if(f==='lato'&&!document.getElementById('font-lato')){const l=document.createElement('link');l.id='font-lato';l.rel='stylesheet';l.href='https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap';document.head.appendChild(l)}
   if(f==='merriweather'&&!document.getElementById('font-merriweather')){const l=document.createElement('link');l.id='font-merriweather';l.rel='stylesheet';l.href='https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&display=swap';document.head.appendChild(l)}
   document.querySelectorAll('#fontGrid .style-option-btn').forEach(b=>b.classList.toggle('selected',b.dataset.font===f));
-  if (typeof proxyBooted !== 'undefined' && proxyBooted && typeof pxMakeNtBlob === 'function') {
-    if (window.__pxNtBlobUrl) { try { URL.revokeObjectURL(window.__pxNtBlobUrl); } catch(e){} }
-    const freshBlob = pxMakeNtBlob();
-    window.__pxNtBlobUrl = freshBlob;
+  if (typeof proxyBooted !== 'undefined' && proxyBooted && typeof pxMakeNtHtml === 'function') {
+    window.__pxNtHtml = pxMakeNtHtml();
     if (typeof pxTabs !== 'undefined') {
       pxTabs.forEach(t => { if (!t.frame||!t.frame.frame) return; if (!t.url||t.title==='New Tab'){t.frame.frame.src=freshBlob;t.url='';} });
     }
@@ -5666,10 +5670,10 @@ const obNameInput=document.getElementById('obNameInput');
 function finishOnboarding(){
   const name=obNameInput.value.trim();if(name)userName=name;
   onboardingEl.classList.remove('visible');
-  // Initialize a session in background but show home screen
+  // Mark onboarding as done — even if name was skipped, never show again
+  DB.setMisc('gyro_onboarded','1').catch(()=>{});
   if(sessions.length===0){newSession();}
   persistSave();
-  // Go to home screen
   switchView('home');
 }
 document.getElementById('obStartBtn').onclick=finishOnboarding;
@@ -5686,12 +5690,12 @@ obNameInput.addEventListener('keydown',e=>{if(e.key==='Enter')finishOnboarding()
 
 
   // Load typewriter words and start effects
-  loadTypewriterWords();
+  await loadTypewriterWords();
   setTimeout(typewriterTick, 600);
   initHomeHUD();
 
   // Restore nav rail expanded state
-  if (localStorage.getItem('gyro_nav_expanded') === '1') {
+  if ((await DB.getMisc('gyro_nav_expanded')) === '1') {
     const nav = document.getElementById('gyro-nav');
     if (nav) {
       nav.classList.add('expanded');
@@ -5710,7 +5714,8 @@ obNameInput.addEventListener('keydown',e=>{if(e.key==='Enter')finishOnboarding()
     currentSystemPrompt=defaultPreset.dataset.preset;
   }
 
-  if(!userName){
+  const onboarded = await DB.getMisc('gyro_onboarded');
+  if(!onboarded){
     onboardingEl.classList.add('visible');
     setTimeout(()=>obNameInput.focus(),100);
   }else{
@@ -5719,7 +5724,6 @@ obNameInput.addEventListener('keydown',e=>{if(e.key==='Enter')finishOnboarding()
       newSession();
     }else{
       if(!activeId||!sessions.find(s=>s.id===activeId))activeId=sessions[sessions.length-1].id;
-      // Always greet with welcome screen — don't resume last chat. History is in the sidebar.
       topTitle.textContent='New Chat';
       renderSidebar();
       showWelcome();
@@ -5743,7 +5747,7 @@ function toggleNavRail() {
   const icon = document.getElementById('gnav-toggle-icon');
   const label = document.getElementById('gnav-toggle-label');
   const expanded = nav.classList.toggle('expanded');
-  localStorage.setItem('gyro_nav_expanded', expanded ? '1' : '0');
+  DB.setMisc('gyro_nav_expanded', expanded ? '1' : '0').catch(()=>{});
   if (icon) {
     icon.innerHTML = expanded
       ? '<polyline points="15 18 9 12 15 6"/>'
@@ -5754,7 +5758,7 @@ function toggleNavRail() {
   if (tipBtn) tipBtn.setAttribute('data-tip', expanded ? 'Collapse' : 'Expand');
 }
 
-function switchView(view) {
+async function switchView(view) {
   currentView = view;
   closeMobileSidebar();
   document.querySelectorAll('.gyro-view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
@@ -5776,7 +5780,7 @@ function switchView(view) {
   if (view === 'games' && !gamesBooted) {
     gamesBooted = true;
     initGames();
-    if (!localStorage.getItem('gg_banner_seen')) {
+    if (!(await DB.getMisc('gg_banner_seen'))) {
       const banner = document.getElementById('games-welcome-banner');
       if (banner) { banner.style.display = 'flex'; setTimeout(() => dismissGamesBanner(), 5000); }
     }
@@ -5792,7 +5796,7 @@ function dismissGamesBanner() {
   if (!banner || banner.style.display === 'none') return;
   banner.classList.add('hiding');
   setTimeout(() => { banner.style.display = 'none'; banner.classList.remove('hiding'); }, 500);
-  localStorage.setItem('gg_banner_seen', '1');
+  DB.setMisc('gg_banner_seen', '1').catch(()=>{});
 }
 
 function syncGGThemeIcon() {
@@ -5823,9 +5827,9 @@ const DEFAULT_TYPEWRITER_WORDS = [
 let typewriterWords = [...DEFAULT_TYPEWRITER_WORDS];
 let twWordIdx = 0, twCharIdx = 0, twDeleting = false;
 
-function loadTypewriterWords() {
+async function loadTypewriterWords() {
   try {
-    const raw = localStorage.getItem('gyro_tw_words');
+    const raw = await DB.getMisc('gyro_tw_words');
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) typewriterWords = parsed;
@@ -5833,7 +5837,7 @@ function loadTypewriterWords() {
   } catch(e) {}
 }
 function saveTypewriterWords() {
-  try { localStorage.setItem('gyro_tw_words', JSON.stringify(typewriterWords)); } catch(e) {}
+  DB.setMisc('gyro_tw_words', JSON.stringify(typewriterWords)).catch(()=>{});
 }
 
 function typewriterTick() {
@@ -5972,11 +5976,12 @@ let ggPopularity   = {};
 let ggCat          = 'all';
 let ggQuery        = '';
 let ggCurrentGame  = null;
-let ggFavorites    = JSON.parse(localStorage.getItem('gg_favs') || '[]');
+let ggFavorites = []; // loaded from DB inside initGames
 let ggToastTimer;
 
 // ── Games init ───────────────────────────────────────────────
 async function initGames() {
+  try { const _gf = await DB.getMisc('gg_favs'); ggFavorites = _gf ? JSON.parse(_gf) : []; } catch(e) {}
   try {
     // Try to get latest commit SHA for freshest assets
     fetch("https://api.github.com/repos/freebuisness/html/commits?per_page=1&t=" + Date.now())
@@ -6123,7 +6128,7 @@ function ggRender() {
 function ggToggleFav(id) {
   if (ggFavorites.includes(id)) ggFavorites = ggFavorites.filter(x => x !== id);
   else ggFavorites.push(id);
-  localStorage.setItem('gg_favs', JSON.stringify(ggFavorites));
+  DB.setMisc('gg_favs', JSON.stringify(ggFavorites)).catch(()=>{});
   ggRender();
 }
 
@@ -6754,14 +6759,14 @@ const LB_KB_ROWS = [
   ['ENTER','Z','X','C','V','B','N','M','⌫'],
 ];
 
-function initLetterbox() {
+async function initLetterbox() {
   lbAnswer = lbGetDailyWord();
   lbGuesses = []; lbCurrentGuess = ''; lbGameOver = false; lbRow = 0;
 
   const dayEl = document.getElementById('lb-day');
   if (dayEl) dayEl.textContent = new Date().toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
 
-  const streak = parseInt(localStorage.getItem('lb_streak')||'0');
+  const streak = parseInt((await DB.getMisc('lb_streak'))||'0');
   const sEl = document.getElementById('lb-streak-n');
   if (sEl) sEl.textContent = streak;
 
@@ -6901,13 +6906,13 @@ function lbShowMsg(msg, duration=1600) {
   clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),duration);
 }
 
-function lbEndGame(won) {
-  let streak = parseInt(localStorage.getItem('lb_streak')||'0');
+async function lbEndGame(won) {
+  let streak = parseInt((await DB.getMisc('lb_streak'))||'0');
   const todayKey = lbGetTodayKey();
-  const lastWon = localStorage.getItem('lb_last_won');
+  const lastWon = await DB.getMisc('lb_last_won');
   if (won) {
-    if (lastWon!==todayKey) { streak++; localStorage.setItem('lb_streak',streak); localStorage.setItem('lb_last_won',todayKey); }
-  } else { streak=0; localStorage.setItem('lb_streak',0); }
+    if (lastWon!==todayKey) { streak++; DB.setMisc('lb_streak',String(streak)).catch(()=>{}); DB.setMisc('lb_last_won',todayKey).catch(()=>{}); }
+  } else { streak=0; DB.setMisc('lb_streak','0').catch(()=>{}); }
   const sEl=document.getElementById('lb-streak-n');
   if(sEl) sEl.textContent=streak;
 
@@ -6936,12 +6941,12 @@ function lbShare() {
 }
 
 function lbSaveState() {
-  try { localStorage.setItem(lbGetTodayKey(), JSON.stringify({guesses:lbGuesses,row:lbRow,over:lbGameOver})); } catch {}
+  try { DB.setMisc(lbGetTodayKey(), JSON.stringify({guesses:lbGuesses,row:lbRow,over:lbGameOver})).catch(()=>{}); } catch {}
 }
 
-function lbRestoreState() {
+async function lbRestoreState() {
   try {
-    const raw=localStorage.getItem(lbGetTodayKey());
+    const raw=await DB.getMisc(lbGetTodayKey());
     if (!raw) return;
     const state=JSON.parse(raw);
     lbGameOver=state.over;
@@ -7229,7 +7234,7 @@ const pxGetBasePath = () => {
   const p = location.pathname.replace(/[^/]*$/, '');
   return (p.endsWith('/') ? p : p + '/');
 };
-const pxGetStoredWisps = () => { try { return JSON.parse(localStorage.getItem('gyro_px_wisps') || '[]'); } catch { return []; } };
+const pxGetStoredWisps = () => { try { return window.__pxWispsCache || []; } catch { return []; } };
 const pxAllServers = () => [...PX_WISP_SERVERS, ...pxGetStoredWisps()];
 const pxGetActive = () => pxTabs.find(t => t.id === pxActiveId);
 const PX_DEFAULT_WISP = PX_WISP_SERVERS[0].url;
@@ -7247,13 +7252,13 @@ async function pxPing(url, timeout = 2500) {
 }
 
 async function pxPickBestServer() {
-  const cur = localStorage.getItem('gyro_px_wisp') || PX_DEFAULT_WISP;
+  const cur = window.__pxWispCache || PX_DEFAULT_WISP;
   const all = pxAllServers();
   const curOk = await pxPing(cur, 1800);
   if (curOk.ok) return;
   const results = await Promise.all(all.map(s => pxPing(s.url, 1800)));
   const best = results.filter(r => r.ok).sort((a, b) => a.ms - b.ms)[0];
-  if (best && best.url !== cur) localStorage.setItem('gyro_px_wisp', best.url);
+  if (best && best.url !== cur) { window.__pxWispCache = best.url; DB.setMisc('gyro_px_wisp', best.url).catch(()=>{}); }
 }
 
 async function pxInitScramjet() {
@@ -7285,7 +7290,7 @@ async function pxInitConn() {
   if (pxConnReady) return;
   const BM = window.BareMux;
   if (!BM) throw new Error('BareMux not loaded.');
-  const wisp = localStorage.getItem('gyro_px_wisp') || PX_DEFAULT_WISP;
+  const wisp = window.__pxWispCache || PX_DEFAULT_WISP;
   const conn = new BM.BareMuxConnection(pxGetBasePath() + 'bareworker.js');
   await conn.setTransport(
     'https://cdn.jsdelivr.net/npm/@mercuryworkshop/epoxy-transport@2.1.28/dist/index.mjs',
@@ -7294,7 +7299,7 @@ async function pxInitConn() {
   pxConnReady = true;
 }
 
-// ── NEW-TAB SHORTCUTS stored in localStorage ─────────────────────
+// ── NEW-TAB SHORTCUTS (stored in IndexedDB via pxSaveShortcuts) ─────
 const PX_NT_DEFAULT_SHORTCUTS = [
   { name:'YouTube',  url:'https://www.youtube.com' },
   { name:'TikTok',   url:'https://www.tiktok.com'  },
@@ -7302,15 +7307,18 @@ const PX_NT_DEFAULT_SHORTCUTS = [
   { name:'Reddit',   url:'https://www.reddit.com'  },
 ];
 function pxGetShortcuts() {
-  try { const s = localStorage.getItem('gyro_px_shortcuts'); return s ? JSON.parse(s) : PX_NT_DEFAULT_SHORTCUTS; }
-  catch { return PX_NT_DEFAULT_SHORTCUTS; }
+  // read from in-memory cache (populated at proxy boot)
+  return window.__pxShortcutsCache || PX_NT_DEFAULT_SHORTCUTS;
 }
-function pxSaveShortcuts(arr) { localStorage.setItem('gyro_px_shortcuts', JSON.stringify(arr)); }
+function pxSaveShortcuts(arr) {
+  window.__pxShortcutsCache = arr;
+  DB.setMisc('gyro_px_shortcuts', JSON.stringify(arr)).catch(()=>{});
+}
 
-function pxMakeNtBlob() {
-  const eng = localStorage.getItem('gyro_px_engine') || 'duckduckgo';
+function pxMakeNtHtml() {
+  const eng = window.__pxEngineCache || 'duckduckgo';
   const safeEng = ['duckduckgo','brave'].includes(eng) ? eng : 'duckduckgo';
-  const fontKey = localStorage.getItem('gyro_font') || 'google-sans';
+  const fontKey = window.__pxFontCache || 'google-sans';
   const FONT_MAP = {
     'google-sans': { family:"'Google Sans','Product Sans',system-ui,sans-serif", gfUrl:"https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;600;700;800&display=swap" },
     'inter':       { family:"'Inter',system-ui,sans-serif", gfUrl:"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" },
@@ -7340,23 +7348,21 @@ body{
     radial-gradient(ellipse 50% 50% at 90% 90%,rgba(109,213,176,.07),transparent),
     radial-gradient(circle,rgba(255,255,255,.02) 1px,transparent 1px);
   background-size:auto,auto,28px 28px;
-  opacity:0;
-  /* Chrome-style: page fades in after paint — no jank, no scale flash */
-  transition:opacity .22s ease;
+  animation:none;
 }
-body.ready{opacity:1}
+/* Smooth staggered fade-up — no body opacity trick that causes flash */
+@keyframes fade-up{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
 @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
 @keyframes ring-spin-o{to{transform:rotate(360deg)}}
 @keyframes ring-spin-m{to{transform:rotate(-360deg)}}
-@keyframes slide-up{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
-.logo-wrap{display:flex;flex-direction:column;align-items:center;gap:10px;margin-bottom:32px;animation:slide-up .38s .04s cubic-bezier(.22,1,.36,1) both}
+.logo-wrap{display:flex;flex-direction:column;align-items:center;gap:10px;margin-bottom:32px;opacity:0;animation:fade-up .42s .05s cubic-bezier(.22,1,.36,1) forwards}
 .logo-svg{animation:float 4.5s ease-in-out infinite}
 .ring-o{transform-origin:26px 26px;animation:ring-spin-o 9s linear infinite}
 .ring-m{transform-origin:26px 26px;animation:ring-spin-m 6s linear infinite}
 .ring-i{transform-origin:26px 26px;animation:ring-spin-o 20s linear infinite}
 .logo-text{font-size:1.5rem;font-weight:800;letter-spacing:-.4px;background:linear-gradient(135deg,var(--acc),var(--acc2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-family:${font.family}}
 .logo-sub{font-size:.62rem;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;font-family:${font.family}}
-.search-wrap{width:100%;max-width:520px;padding:0 20px;margin-bottom:28px;animation:slide-up .38s .10s cubic-bezier(.22,1,.36,1) both}
+.search-wrap{width:100%;max-width:520px;padding:0 20px;margin-bottom:28px;opacity:0;animation:fade-up .42s .13s cubic-bezier(.22,1,.36,1) forwards}
 .search-box{
   display:flex;align-items:center;gap:10px;
   background:rgba(255,255,255,.04);border:1.5px solid var(--b1);border-radius:18px;padding:11px 16px;
@@ -7371,7 +7377,7 @@ body.ready{opacity:1}
 .engine-badge{padding:4px 10px;border-radius:8px;background:rgba(79,156,249,.1);border:1px solid rgba(79,156,249,.2);font-size:.68rem;font-weight:700;color:var(--acc);white-space:nowrap;flex-shrink:0;font-family:${font.family};transition:all .2s}
 .search-box:focus-within .engine-badge{background:rgba(79,156,249,.18);border-color:rgba(79,156,249,.4)}
 /* shortcuts grid */
-.shortcuts-section{width:100%;max-width:520px;padding:0 20px;animation:slide-up .38s .16s cubic-bezier(.22,1,.36,1) both}
+.shortcuts-section{width:100%;max-width:520px;padding:0 20px;opacity:0;animation:fade-up .42s .21s cubic-bezier(.22,1,.36,1) forwards}
 .shortcuts{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:10px}
 .shortcut{
   display:flex;flex-direction:column;align-items:center;gap:7px;padding:13px 6px;
@@ -7572,12 +7578,11 @@ document.getElementById('q').addEventListener('keydown', function(e){
 // Click search box to focus
 document.getElementById('search-box').addEventListener('click', function(){ document.getElementById('q').focus(); });
 
-// Fade body in after first paint — Chrome-style, no layout flash
-requestAnimationFrame(function(){ requestAnimationFrame(function(){ document.body.classList.add('ready'); }); });
+// animations handled by CSS forwards fill — no JS needed
 
 renderShortcuts();
 <\/script></body></html>`;
-  return URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+  return html;
 }
 
 function pxBuildUI() {
@@ -7627,8 +7632,7 @@ function pxBuildUI() {
         const arr = JSON.parse(e.data.url);
         pxSaveShortcuts(arr);
         // Regenerate blob so future new tabs use updated shortcuts
-        if (window.__pxNtBlobUrl) { try { URL.revokeObjectURL(window.__pxNtBlobUrl); } catch(err){} }
-        window.__pxNtBlobUrl = pxMakeNtBlob();
+        window.__pxNtHtml = pxMakeNtHtml();
       } catch(err) {}
     }
   });
@@ -7650,8 +7654,7 @@ function pxNavFwd() {
 function pxGoNt(t) {
   if (!t) return;
   // Always use the latest blob (regenerated when engine changes)
-  const blobSrc = window.__pxNtBlobUrl || window.__pxNtBlob;
-  t.frame.frame.src = blobSrc;
+  t.frame.frame.srcdoc = window.__pxNtHtml || '';
   t.title = 'New Tab'; t.url = ''; t.favicon = null;
   pxRenderTabs(); pxUpdateAddr();
 }
@@ -7659,7 +7662,7 @@ const PX_SEARCH_ENGINES = {
   duckduckgo: q => `https://duckduckgo.com/?q=${encodeURIComponent(q)}`,
   brave:      q => `https://search.brave.com/search?q=${encodeURIComponent(q)}`,
 };
-let pxSearchEngine = localStorage.getItem('gyro_px_engine') || 'duckduckgo';
+let pxSearchEngine = 'duckduckgo'; // loaded from DB at proxy boot
 // Ensure valid engine
 if (!['duckduckgo','brave'].includes(pxSearchEngine)) pxSearchEngine = 'duckduckgo';
 
@@ -7682,7 +7685,7 @@ function pxCreateTab(activate = true) {
     loading: false, favicon: null,
     hist: ['nt'], hi: 0, _nav: false, _skipT: null, _fallT: null
   };
-  frame.frame.src = window.__pxNtBlobUrl || window.__pxNtBlob;
+  frame.frame.srcdoc = window.__pxNtHtml || '';
   frame.addEventListener('urlchange', e => pxOnUrl(t, e.url));
   frame.frame.addEventListener('load', () => pxOnLoad(t));
   pxTabs.push(t);
@@ -7709,7 +7712,7 @@ function pxOnLoad(t) {
   if (t.id === pxActiveId) pxSetLoading(false);
   try { const title = t.frame.frame.contentWindow.document.title; if(title) t.title = title; } catch {}
   const href = t.frame.frame.contentWindow?.location?.href || '';
-  if (href === window.__pxNtBlob || href === window.__pxNtBlobUrl || href.includes('NT.html')) { t.title='New Tab'; t.url=''; t.favicon=null; }
+  if (!href || href === 'about:srcdoc' || href.includes('NT.html')) { t.title='New Tab'; t.url=''; t.favicon=null; }
   pxRenderTabs(); pxUpdateAddr(); pxSetLoadBar(100);
 }
 
@@ -7775,7 +7778,7 @@ function pxRenderTabs() {
 
 function pxUpdateAddr() {
   const bar = document.getElementById('px-addr'), t = pxGetActive();
-  if (bar && t) bar.value = (t.url && t.url !== window.__pxNtBlob && t.url !== window.__pxNtBlobUrl) ? t.url : '';
+  if (bar && t) bar.value = (t.url && t.url !== 'about:srcdoc') ? t.url : '';
 }
 
 // ── SEARCH ENGINE ────────────────────────────────────────────────
@@ -7786,12 +7789,10 @@ function pxRenderEngines() {
     btn.classList.toggle('active', eng === pxSearchEngine);
     btn.onclick = () => {
       pxSearchEngine = eng;
-      localStorage.setItem('gyro_px_engine', eng);
+      pxSearchEngine = eng; DB.setMisc('gyro_px_engine', eng).catch(()=>{});
       pxRenderEngines();
       // Revoke old blob and create fresh one with new engine baked in
-      if (window.__pxNtBlobUrl) { try { URL.revokeObjectURL(window.__pxNtBlobUrl); } catch(e){} }
-      const freshBlob = pxMakeNtBlob();
-      window.__pxNtBlobUrl = freshBlob;
+      window.__pxNtHtml = pxMakeNtHtml();
       // Reload every tab that is on the new-tab page
       pxTabs.forEach(t => {
         if (!t.frame || !t.frame.frame) return;
@@ -7823,7 +7824,7 @@ function pxSetLoadBar(pct) {
 
 function pxRenderServers() {
   const list = document.getElementById('px-server-list'); list.innerHTML = '';
-  const cur = localStorage.getItem('gyro_px_wisp') || PX_DEFAULT_WISP;
+  const cur = window.__pxWispCache || PX_DEFAULT_WISP;
   pxAllServers().forEach((s, i) => {
     const isCustom = i >= PX_WISP_SERVERS.length;
     const el = document.createElement('div');
@@ -7855,20 +7856,20 @@ function pxAddCustomWisp() {
   const stored = pxGetStoredWisps();
   if ([...PX_WISP_SERVERS,...stored].some(w=>w.url===url)) { toast('Server already added',2000); return; }
   stored.push({ name:'Custom '+(stored.length+1), url });
-  localStorage.setItem('gyro_px_wisps', JSON.stringify(stored));
+  window.__pxWispsCache = stored; DB.setMisc('gyro_px_wisps', JSON.stringify(stored)).catch(()=>{});
   pxSetWisp(url); inp.value='';
 }
 
 window.pxDeleteWisp = function(url) {
   if (!confirm('Remove this server?')) return;
   const updated = pxGetStoredWisps().filter(w=>w.url!==url);
-  localStorage.setItem('gyro_px_wisps', JSON.stringify(updated));
-  if (localStorage.getItem('gyro_px_wisp')===url) pxSetWisp(PX_DEFAULT_WISP);
+  window.__pxWispsCache = updated; DB.setMisc('gyro_px_wisps', JSON.stringify(updated)).catch(()=>{});
+  if ((window.__pxWispCache||PX_DEFAULT_WISP)===url) pxSetWisp(PX_DEFAULT_WISP);
   else pxRenderServers();
 };
 
 function pxSetWisp(url) {
-  localStorage.setItem('gyro_px_wisp', url);
+  window.__pxWispCache = url; DB.setMisc('gyro_px_wisp', url).catch(()=>{});
   navigator.serviceWorker.controller?.postMessage({ type:'config', wispurl: url });
   document.getElementById('px-modal-backdrop').style.display = 'none';
   toast('Switching proxy server…', 2000);
@@ -7877,6 +7878,29 @@ function pxSetWisp(url) {
 
 // ── INIT ───────────────────────────────────────────────────────────
 async function proxyInit() {
+  // Load all proxy/misc data from IndexedDB into in-memory caches
+  try {
+    const [eng, wisps, wisp, shortcuts, font] = await Promise.all([
+      DB.getMisc('gyro_px_engine'),
+      DB.getMisc('gyro_px_wisps'),
+      DB.getMisc('gyro_px_wisp'),
+      DB.getMisc('gyro_px_shortcuts'),
+      DB.getMisc('gyro_font'),
+    ]);
+    if (eng) { pxSearchEngine = eng; window.__pxEngineCache = eng; }
+    else window.__pxEngineCache = 'duckduckgo';
+    window.__pxWispsCache = wisps ? JSON.parse(wisps) : [];
+    window.__pxWispCache = wisp || null;
+    window.__pxShortcutsCache = shortcuts ? JSON.parse(shortcuts) : null;
+    window.__pxFontCache = font || 'google-sans';
+  } catch(e) {
+    window.__pxEngineCache = 'duckduckgo';
+    window.__pxWispsCache = [];
+    window.__pxWispCache = null;
+    window.__pxShortcutsCache = null;
+    window.__pxFontCache = 'google-sans';
+  }
+
   // File:// check
   if (location.protocol === 'file:') {
     document.getElementById('px-file-error').style.display = 'flex';
@@ -7920,8 +7944,7 @@ async function proxyInit() {
     if (state==='done')  { icon.textContent='✓'; if(bar)bar.style.width=(((idx+1)/steps.length)*100)+'%'; }
   };
 
-  window.__pxNtBlob = pxMakeNtBlob();
-  window.__pxNtBlobUrl = window.__pxNtBlob;
+  window.__pxNtHtml = pxMakeNtHtml();
 
   try {
     mark('pxs1','active');
@@ -7941,12 +7964,12 @@ async function proxyInit() {
       mark('pxs4','active');
       const reg = await navigator.serviceWorker.register(pxGetBasePath() + 'sw.js', { scope: pxGetBasePath() });
       await navigator.serviceWorker.ready;
-      const wisp = localStorage.getItem('gyro_px_wisp') || PX_DEFAULT_WISP;
+      const wisp = window.__pxWispCache || PX_DEFAULT_WISP;
       const cfg = { type:'config', wispurl: wisp, servers: pxAllServers(), autoswitch: true };
       const send = () => (reg.active || navigator.serviceWorker.controller)?.postMessage(cfg);
       send(); setTimeout(send, 500); setTimeout(send, 1500);
       navigator.serviceWorker.addEventListener('message', e => {
-        if (e.data?.type==='wispChanged') { localStorage.setItem('gyro_px_wisp', e.data.url); toast('Proxy auto-switched to faster server',2500); }
+        if (e.data?.type==='wispChanged') { window.__pxWispCache = e.data.url; DB.setMisc('gyro_px_wisp', e.data.url).catch(()=>{}); toast('Proxy auto-switched to faster server',2500); }
       });
       reg.update();
       mark('pxs4','done');
