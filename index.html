@@ -1136,6 +1136,17 @@
       text-align:center;line-height:1.4;
     }
 
+    /* ── PROXY NEW TAB BUTTON ─────────────────────────────────── */
+    .px-new-tab-btn{
+      flex-shrink:0;width:28px;height:28px;border-radius:8px;
+      background:transparent;border:1.5px dashed var(--b2);
+      color:var(--t3);cursor:pointer;
+      display:flex;align-items:center;justify-content:center;
+      transition:all .15s;margin-left:2px;
+    }
+    .px-new-tab-btn:hover{background:var(--hov);border-color:var(--acc);color:var(--acc)}
+    .px-new-tab-btn svg{width:13px;height:13px;pointer-events:none}
+    .px-new-tab-btn:disabled{opacity:.3;cursor:not-allowed}
     /* ── PROXY ANIMATIONS ─────────────────────────────────────── */
     @keyframes px-tab-in{from{opacity:0}to{opacity:1}}
     .px-tab{animation:px-tab-in .18s ease both}
@@ -1144,22 +1155,26 @@
     #px-frames iframe:not(.px-loading){filter:none;transition:filter .25s cubic-bezier(.4,0,.2,1)}
 
     /* ── PROXY FULLSCREEN ──────────────────────────────────────── */
-    #px-mount.px-fs{
-      position:fixed!important;inset:0!important;z-index:9999!important;
-      display:flex;flex-direction:column;background:var(--bg);
+    /* Native fullscreen: browser handles the overlay, we just hide the nav bar */
+    #view-proxy:fullscreen,
+    #view-proxy:-webkit-full-screen,
+    #view-proxy:-moz-full-screen {
+      display:flex!important;flex-direction:column;background:var(--bg);
     }
-    #view-proxy.px-fs-view{
-      position:fixed!important;inset:0!important;z-index:9998!important;
-      margin:0!important;padding:0!important;
+    /* Hide nav bar in fullscreen, show only on hover reveal */
+    #view-proxy.px-fs-active #px-nav {
+      position:fixed;top:0;left:0;right:0;z-index:2147483647;
+      transform:translateY(-100%);opacity:0;pointer-events:none;
+      transition:transform .22s cubic-bezier(.4,0,.2,1),opacity .18s ease;
     }
-    /* In fullscreen the nav is a floating overlay bar */
-    #px-mount.px-fs #px-nav{
-      position:absolute;top:0;left:0;right:0;z-index:10001;
-      transition:transform .22s cubic-bezier(.4,0,.2,1),opacity .22s ease;
+    #view-proxy.px-fs-active #px-nav.px-nav-visible {
+      transform:translateY(0);opacity:1;pointer-events:all;
     }
-    #px-mount.px-fs #px-frames{
-      position:absolute;inset:0;z-index:10000;
+    /* Invisible hover zone at top of screen */
+    #px-fs-hover-zone {
+      display:none;position:fixed;top:0;left:0;right:0;height:6px;z-index:2147483646;
     }
+    #view-proxy.px-fs-active #px-fs-hover-zone { display:block; }
     #px-load-bar{
       height:100%;width:0%;background:linear-gradient(90deg,var(--acc),var(--acc2),var(--acc));
       background-size:200% 100%;
@@ -7299,21 +7314,27 @@ async function pxPickBestServer() {
 // ── Scramjet + BareMux init ──────────────────────────────────
 async function pxInitScramjet() {
   if (pxScramjet) return pxScramjet;
-  if (typeof $scramjetLoadController === 'undefined') throw new Error('Scramjet not loaded.');
+  if (typeof $scramjetLoadController === 'undefined') throw new Error('Scramjet script not loaded. Check your internet connection.');
   const { ScramjetController } = $scramjetLoadController();
+  const CDN = 'https://cdn.jsdelivr.net/gh/Destroyed12121/Staticsj@main/JS/';
   pxScramjet = new ScramjetController({
     prefix: pxGetBasePath() + 'scramjet/',
     files: {
-      wasm: 'https://cdn.jsdelivr.net/gh/Destroyed12121/Staticsj@main/JS/scramjet.wasm.wasm',
-      all:  'https://cdn.jsdelivr.net/gh/Destroyed12121/Staticsj@main/JS/scramjet.all.js',
-      sync: 'https://cdn.jsdelivr.net/gh/Destroyed12121/Staticsj@main/JS/scramjet.sync.js',
+      wasm: CDN + 'scramjet.wasm.wasm',
+      all:  CDN + 'scramjet.all.js',
+      sync: CDN + 'scramjet.sync.js',
     }
   });
   try { await pxScramjet.init(); }
   catch(err) {
-    if (/IDBDatabase|object stores/.test(err.message)) {
-      for (const d of ['scramjet-data','scrambase','ScramjetData']) try{indexedDB.deleteDatabase(d);}catch{}
-      pxScramjet = null; return pxInitScramjet();
+    if (/IDBDatabase|object stores|VersionError/.test(err.message)) {
+      console.warn('[Gyro] Scramjet DB error, clearing and retrying:', err.message);
+      for (const d of ['scramjet-data','scrambase','ScramjetData','sj-cache']) {
+        try { indexedDB.deleteDatabase(d); } catch {}
+      }
+      pxScramjet = null;
+      await new Promise(r => setTimeout(r, 300));
+      return pxInitScramjet();
     }
     throw err;
   }
@@ -7498,15 +7519,20 @@ function pxOnLoad(t) {
 
 function pxCreateTab(activate = true) {
   if (!pxCanAddTab()) return;
+  if (!pxScramjet) { console.error('[Gyro] Scramjet not ready'); return; }
   const frame = pxScramjet.createFrame();
   const t = { id:pxNextId++, title:'New Tab', url:'', frame, loading:false, favicon:null,
                hist:['nt'], hi:0, _nav:false, _skipT:null, _fallT:null };
+  // Order matters: append to DOM first, then add listeners, then set srcdoc
+  const container = document.getElementById('px-frames');
+  frame.frame.setAttribute('referrerpolicy', 'no-referrer');
+  frame.frame.style.cssText = 'width:100%;height:100%;border:none;position:absolute;top:0;left:0;';
+  container.appendChild(frame.frame);
   frame.frame.addEventListener('load', () => pxOnLoad(t));
   frame.addEventListener('urlchange', e => pxOnUrl(t, e.url));
-  frame.frame.setAttribute('referrerpolicy', 'no-referrer');
-  document.getElementById('px-frames').appendChild(frame.frame);
-  frame.frame.srcdoc = window.__pxNtHtml || '';
   pxTabs.push(t);
+  // Set srcdoc last so load event fires after listener is registered
+  requestAnimationFrame(() => { frame.frame.srcdoc = window.__pxNtHtml || ''; });
   if (activate) pxSwitchTab(t.id);
   return t;
 }
@@ -7593,52 +7619,7 @@ function pxSetLoadBar(pct) {
 // ── Fullscreen ───────────────────────────────────────────────
 let pxFullscreen = false;
 let pxFsHoverTimer = null;
-let pxFsBarVisible = false;
-
-function pxEnterFullscreen() {
-  pxFullscreen = true;
-  const mount = document.getElementById('px-mount');
-  const view = document.getElementById('view-proxy');
-  const gyroNav = document.getElementById('gyro-nav');
-  if (gyroNav) gyroNav.style.display = 'none';
-  mount.classList.add('px-fs');
-  view.classList.add('px-fs-view');
-  document.getElementById('px-fs-btn').innerHTML = pxFsExitIcon();
-  document.getElementById('px-fs-btn').title = 'Exit Fullscreen';
-  // Show the floating bar briefly then hide it
-  pxShowFsBar(true);
-  setTimeout(()=>pxShowFsBar(false), 1800);
-}
-
-function pxExitFullscreen() {
-  pxFullscreen = false;
-  const mount = document.getElementById('px-mount');
-  const view = document.getElementById('view-proxy');
-  const gyroNav = document.getElementById('gyro-nav');
-  if (gyroNav) gyroNav.style.display = '';
-  mount.classList.remove('px-fs');
-  view.classList.remove('px-fs-view');
-  document.getElementById('px-fs-btn').innerHTML = pxFsEnterIcon();
-  document.getElementById('px-fs-btn').title = 'Fullscreen';
-  pxShowFsBar(false);
-  // Restore the normal nav bar
-  const nav = document.getElementById('px-nav');
-  if (nav) { nav.style.transform = ''; nav.style.opacity = ''; nav.style.pointerEvents = ''; }
-}
-
-function pxToggleFullscreen() {
-  if (pxFullscreen) pxExitFullscreen(); else pxEnterFullscreen();
-}
-
-function pxShowFsBar(show) {
-  pxFsBarVisible = show;
-  const nav = document.getElementById('px-nav');
-  if (!nav) return;
-  if (!pxFullscreen) return; // nav is always visible when not fullscreen
-  nav.style.transform  = show ? 'translateY(0)' : 'translateY(-100%)';
-  nav.style.opacity    = show ? '1' : '0';
-  nav.style.pointerEvents = show ? '' : 'none';
-}
+let pxFsHideTimer = null;
 
 function pxFsEnterIcon() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
@@ -7647,24 +7628,76 @@ function pxFsExitIcon() {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>`;
 }
 
-// Mouse hover at very top of screen while in fullscreen → show bar after 2s
+function pxShowFsBar(show) {
+  const nav = document.getElementById('px-nav');
+  if (!nav) return;
+  if (show) {
+    nav.classList.add('px-nav-visible');
+    // Auto-hide after 3s of no movement
+    clearTimeout(pxFsHideTimer);
+    pxFsHideTimer = setTimeout(() => nav.classList.remove('px-nav-visible'), 3000);
+  } else {
+    nav.classList.remove('px-nav-visible');
+  }
+}
+
+function pxEnterFullscreen() {
+  const view = document.getElementById('view-proxy');
+  const fs = view.requestFullscreen || view.webkitRequestFullscreen || view.mozRequestFullScreen;
+  if (fs) fs.call(view).catch(()=>{});
+}
+
+function pxExitFullscreen() {
+  const ex = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen;
+  if (ex) ex.call(document).catch(()=>{});
+}
+
+function pxToggleFullscreen() {
+  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  if (fsEl) pxExitFullscreen(); else pxEnterFullscreen();
+}
+
+// Listen for native fullscreen change to update button + class
 function pxSetupFsHover() {
+  const onFsChange = () => {
+    const view = document.getElementById('view-proxy');
+    const btn  = document.getElementById('px-fs-btn');
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    pxFullscreen = !!(fsEl && (fsEl === view || view.contains(fsEl)));
+    if (pxFullscreen) {
+      view.classList.add('px-fs-active');
+      if (btn) { btn.innerHTML = pxFsExitIcon(); btn.title = 'Exit Fullscreen'; }
+      // Show bar briefly on enter
+      pxShowFsBar(true);
+    } else {
+      view.classList.remove('px-fs-active');
+      const nav = document.getElementById('px-nav');
+      if (nav) nav.classList.remove('px-nav-visible');
+      if (btn) { btn.innerHTML = pxFsEnterIcon(); btn.title = 'Fullscreen'; }
+    }
+  };
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+
+  // Hover zone: mouse at very top for 2s → show bar
+  const zone = document.getElementById('px-fs-hover-zone');
+  if (zone) {
+    zone.addEventListener('mouseenter', () => {
+      if (!pxFullscreen) return;
+      pxFsHoverTimer = setTimeout(() => pxShowFsBar(true), 2000);
+    });
+    zone.addEventListener('mouseleave', () => {
+      clearTimeout(pxFsHoverTimer);
+    });
+  }
+  // Moving into nav area resets the auto-hide
   document.addEventListener('mousemove', e => {
     if (!pxFullscreen) return;
-    if (e.clientY < 8) {
-      if (!pxFsHoverTimer && !pxFsBarVisible) {
-        pxFsHoverTimer = setTimeout(() => {
-          pxShowFsBar(true);
-          pxFsHoverTimer = null;
-        }, 2000);
-      }
-    } else if (e.clientY > 56) {
-      // Mouse moved away from bar area — hide after short delay
-      clearTimeout(pxFsHoverTimer);
-      pxFsHoverTimer = null;
-      if (pxFsBarVisible) {
-        setTimeout(() => { if (pxFullscreen && pxFsBarVisible) pxShowFsBar(false); }, 700);
-      }
+    const nav = document.getElementById('px-nav');
+    if (!nav) return;
+    if (e.clientY < 60 && nav.classList.contains('px-nav-visible')) {
+      clearTimeout(pxFsHideTimer);
+      pxFsHideTimer = setTimeout(() => nav.classList.remove('px-nav-visible'), 3000);
     }
   });
 }
@@ -7764,7 +7797,8 @@ function pxOpenSettings() {
 function pxBuildUI() {
   const mount = document.getElementById('px-mount');
   mount.innerHTML = `
-    <div id="px-nav" style="display:flex;flex-direction:column;background:var(--surf);border-bottom:1px solid var(--b1);transition:transform .22s cubic-bezier(.4,0,.2,1),opacity .22s ease;z-index:10;position:relative">
+    <div id="px-fs-hover-zone"></div>
+    <div id="px-nav" style="display:flex;flex-direction:column;background:var(--surf);border-bottom:1px solid var(--b1);transition:transform .22s cubic-bezier(.4,0,.2,1),opacity .18s ease;z-index:10;position:relative">
       <div id="px-tabs" style="display:flex;align-items:center;padding:4px 6px 0;gap:4px;overflow-x:auto;min-height:36px;scrollbar-width:none"></div>
       <div style="display:flex;align-items:center;gap:6px;padding:5px 8px">
         <button class="px-nav-btn" id="px-back-btn" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke="currentColor"><polyline points="15 18 9 12 15 6"/></svg></button>
@@ -7779,6 +7813,9 @@ function pxBuildUI() {
         </div>
         <button class="px-nav-btn" id="px-server-btn" title="Proxy Settings" onclick="pxOpenSettings()">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+        </button>
+        <button class="px-nav-btn" id="px-theme-btn" title="Toggle theme" onclick="if(typeof applyTheme==='function'){applyTheme(currentTheme==='dark'?'light':'dark');if(typeof persistSave==='function')persistSave();}">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke="currentColor"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         </button>
         <button class="px-nav-btn" id="px-fs-btn" title="Fullscreen" onclick="pxToggleFullscreen()">${pxFsEnterIcon()}</button>
       </div>
