@@ -2439,6 +2439,7 @@
                 <label class="toggle-switch"><input type="checkbox" id="promptEnhanceToggle" checked/><span class="toggle-slider"></span></label>
               </div>
             </div>
+
           </div>
 
           <!-- MEMORIES -->
@@ -2705,8 +2706,8 @@ const PURIFY_CFG={
 /* ================================================================
    CONFIG
 ================================================================ */
-const API_URL='https://api.groq.com/openai/v1/chat/completions';
-const GROQ_API_KEY='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';
+const API_URL='https://gyro-ai.studios-blockblitz.workers.dev';
+// API key lives on Cloudflare Worker — not needed in browser
 const SYSTEM_PROMPT_BASE=`Your name is Gyro AI. You are Gyro AI — a sharp, knowledgeable, and genuinely helpful AI assistant. Always refer to yourself as Gyro AI. If asked who made you or who built you, say you are Gyro AI and leave it at that.
 
 INTELLIGENCE STANDARDS:
@@ -3443,7 +3444,7 @@ async function callApi(payload,attempt=0){
     if(attempt>=VISION_MODELS.length)throw new Error('Vision model unavailable. Try a smaller image or try again.');
     const modelId=VISION_MODELS[attempt];
     try{
-      const r=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+GROQ_API_KEY},body:JSON.stringify({...payload,model:modelId,messages:visionMessages,stream:false})});
+      const r=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,model:modelId,messages:visionMessages,stream:false})});
       if(!r.ok){
         let errMsg=`HTTP ${r.status}`;
         try{const eb=await r.json();if(eb&&eb.error&&eb.error.message)errMsg=eb.error.message;}catch(_){}
@@ -3460,7 +3461,7 @@ async function callApi(payload,attempt=0){
     if(attempt>=MODELS.length)throw new Error('All models unavailable.');
     const modelId=payload.model||MODELS[modelIdx].id;
     try{
-      const r=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+GROQ_API_KEY},body:JSON.stringify({...payload,model:modelId,messages,stream:false})});
+      const r=await fetch(API_URL,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,model:modelId,messages,stream:false})});
       if(!r.ok){
         let errMsg=`HTTP ${r.status}`;
         try{const eb=await r.json();if(eb&&eb.error&&eb.error.message)errMsg=eb.error.message;}catch(_){}
