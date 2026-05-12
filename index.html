@@ -1137,14 +1137,29 @@
     }
 
     /* ── PROXY ANIMATIONS ─────────────────────────────────────── */
-    /* Tab appear: clean opacity fade, no scale/translate jank */
     @keyframes px-tab-in{from{opacity:0}to{opacity:1}}
     .px-tab{animation:px-tab-in .18s ease both}
-    /* iframe: no animation — instant display, content fades via loading blur */
     #px-frames iframe{animation:none}
-    /* Loading blur: smooth in/out on the page content */
     #px-frames iframe.px-loading{filter:blur(8px) saturate(.6);transition:filter .3s cubic-bezier(.4,0,.2,1)}
     #px-frames iframe:not(.px-loading){filter:none;transition:filter .25s cubic-bezier(.4,0,.2,1)}
+
+    /* ── PROXY FULLSCREEN ──────────────────────────────────────── */
+    #px-mount.px-fs{
+      position:fixed!important;inset:0!important;z-index:9999!important;
+      display:flex;flex-direction:column;background:var(--bg);
+    }
+    #view-proxy.px-fs-view{
+      position:fixed!important;inset:0!important;z-index:9998!important;
+      margin:0!important;padding:0!important;
+    }
+    /* In fullscreen the nav is a floating overlay bar */
+    #px-mount.px-fs #px-nav{
+      position:absolute;top:0;left:0;right:0;z-index:10001;
+      transition:transform .22s cubic-bezier(.4,0,.2,1),opacity .22s ease;
+    }
+    #px-mount.px-fs #px-frames{
+      position:absolute;inset:0;z-index:10000;
+    }
     #px-load-bar{
       height:100%;width:0%;background:linear-gradient(90deg,var(--acc),var(--acc2),var(--acc));
       background-size:200% 100%;
@@ -7199,84 +7214,91 @@ function typeScrollWords() {
 }
 
 /* ================================================================
-   GYRO PROXY — Scramjet + BareMux web proxy
+   GYRO PROXY — GhostLink engine, Gyro UI
 ================================================================ */
-// Load Scramjet + BareMux lazily when proxy view is first opened
-let _pxScramjetLoaded = false;
 
+// ── Lazy-load Scramjet + BareMux ─────────────────────────────
+let _pxScriptsLoaded = false;
 function pxLoadScripts() {
-  if (_pxScramjetLoaded) return Promise.resolve();
+  if (_pxScriptsLoaded) return Promise.resolve();
   return new Promise((res, rej) => {
-    const s1 = document.createElement('script');
-    s1.src = 'https://cdn.jsdelivr.net/gh/Destroyed12121/Staticsj@main/JS/scramjet.all.js';
-    s1.onload = () => {
-      // Load BareMux as ESM and expose globally
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/gh/Destroyed12121/Staticsj@main/JS/scramjet.all.js';
+    s.onload = () => {
       import('https://cdn.jsdelivr.net/npm/@mercuryworkshop/bare-mux/dist/index.mjs')
-        .then(m => { window.BareMux = m; _pxScramjetLoaded = true; res(); })
+        .then(m => { window.BareMux = m; _pxScriptsLoaded = true; res(); })
         .catch(rej);
     };
-    s1.onerror = () => rej(new Error('Failed to load Scramjet CDN. Check your internet connection.'));
-    document.head.appendChild(s1);
+    s.onerror = () => rej(new Error('Failed to load Scramjet. Check your internet.'));
+    document.head.appendChild(s);
   });
 }
 
-const PX_WISP_SERVERS = [
-  { name: 'Titanium',     url: 'wss://titaniumnetwork.org/wisp/' },
-  { name: 'Holy Unblocker', url: 'wss://holyubofficial.net/wisp/' },
-  { name: 'Interstellar', url: 'wss://interstellar.lawsj.xyz/wisp/' },
-  { name: 'Radon Games',  url: 'wss://radon.games/wisp/' },
-  { name: 'Pyro',         url: 'wss://pyro.works/wisp/' },
-  { name: 'AstroProxy',   url: 'wss://astro.owliber.net/wisp/' },
-  { name: 'Hydrovolter',  url: 'wss://admin.proxy.hydrovolter.com/scramjet/wisp/' },
-];
+// ── Wisp servers — fetched from GhostLink's live list ────────
+let PX_WISP_SERVERS = [];
+let PX_DEFAULT_WISP = null;
 
+async function pxFetchWispServers() {
+  try {
+    const res = await fetch('https://cdn.jsdelivr.net/gh/virtuan4-max/ghostlinkhub@main/proxy/wisps.html');
+    const text = await res.text();
+    const match = text.match(/const\s+WISP_SERVERS\s*=\s*(\[[\s\S]*?\]);/);
+    if (match) PX_WISP_SERVERS = (new Function('return ' + match[1]))();
+  } catch(e) { console.warn('[Gyro Proxy] Could not fetch wisp list:', e); }
+  if (!PX_WISP_SERVERS.length) {
+    PX_WISP_SERVERS = [
+      { name: 'Hydrovolter', url: 'wss://admin.proxy.hydrovolter.com/scramjet/wisp/' },
+      { name: 'i-ready',     url: 'wss://i-ready.math.bostoncareercounselor.com/wisp/' },
+    ];
+  }
+  PX_DEFAULT_WISP = PX_WISP_SERVERS[0].url;
+}
+
+// ── State ─────────────────────────────────────────────────────
 let pxScramjet = null, pxConnReady = false;
 let pxTabs = [], pxActiveId = null, pxNextId = 1, pxDragSrc = null;
+let pxSearchEngine = 'duckduckgo';
 
-const pxGetBasePath = () => {
-  const p = location.pathname.replace(/[^/]*$/, '');
-  return (p.endsWith('/') ? p : p + '/');
+const PX_SEARCH_ENGINES = {
+  duckduckgo: q => 'https://duckduckgo.com/?q=' + encodeURIComponent(q),
+  brave:      q => 'https://search.brave.com/search?q=' + encodeURIComponent(q),
+  google:     q => 'https://www.google.com/search?q=' + encodeURIComponent(q),
+  bing:       q => 'https://www.bing.com/search?q=' + encodeURIComponent(q),
 };
-const pxGetStoredWisps = () => { try { return window.__pxWispsCache || []; } catch { return []; } };
-const pxAllServers = () => [...PX_WISP_SERVERS, ...pxGetStoredWisps()];
-const pxGetActive = () => pxTabs.find(t => t.id === pxActiveId);
-const PX_DEFAULT_WISP = PX_WISP_SERVERS[0].url; // Titanium
 
+const pxGetBasePath = () => { const p = location.pathname.replace(/[^/]*$/, ''); return p.endsWith('/') ? p : p + '/'; };
+const pxGetCustomWisps = () => { try { return window.__pxCustomWisps || []; } catch { return []; } };
+const pxAllServers = () => [...PX_WISP_SERVERS, ...pxGetCustomWisps()];
+const pxGetActive  = () => pxTabs.find(t => t.id === pxActiveId);
+const pxCanAddTab  = () => pxTabs.length < 12;
+
+// ── Ping ─────────────────────────────────────────────────────
 async function pxPing(url, timeout = 2500) {
   return new Promise(resolve => {
     const t0 = Date.now();
     try {
       const ws = new WebSocket(url);
-      const timer = setTimeout(() => { try{ws.close();}catch{} resolve({ url, ok: false, ms: null }); }, timeout);
-      ws.onopen  = () => { clearTimeout(timer); try{ws.close();}catch{} resolve({ url, ok: true, ms: Date.now()-t0 }); };
-      ws.onerror = () => { clearTimeout(timer); resolve({ url, ok: false, ms: null }); };
-    } catch { resolve({ url, ok: false, ms: null }); }
+      const timer = setTimeout(() => { try{ws.close();}catch{} resolve({url,ok:false,ms:null}); }, timeout);
+      ws.onopen  = () => { clearTimeout(timer); try{ws.close();}catch{} resolve({url,ok:true,ms:Date.now()-t0}); };
+      ws.onerror = () => { clearTimeout(timer); resolve({url,ok:false,ms:null}); };
+    } catch { resolve({url,ok:false,ms:null}); }
   });
 }
 
 async function pxPickBestServer() {
   const cur = window.__pxWispCache || PX_DEFAULT_WISP;
-  const all = pxAllServers();
-  // First try the currently cached server
-  const curOk = await pxPing(cur, 2500);
-  if (curOk.ok) return;
-  // Try all servers in parallel
-  const results = await Promise.all(all.map(s => pxPing(s.url, 3000)));
-  const working = results.filter(r => r.ok).sort((a, b) => a.ms - b.ms);
-  if (working.length === 0) {
-    throw new Error('All proxy servers are offline. Try adding a custom wisp server.');
-  }
-  const best = working[0];
-  if (best.url !== cur) {
-    window.__pxWispCache = best.url;
-    DB.setMisc('gyro_px_wisp', best.url).catch(()=>{});
-  }
+  if (await pxPing(cur, 2500).then(r=>r.ok)) return; // current is fine
+  const results = await Promise.all(pxAllServers().map(s => pxPing(s.url, 3000)));
+  const best = results.filter(r=>r.ok).sort((a,b)=>a.ms-b.ms)[0];
+  if (!best) throw new Error('All proxy servers are offline. Add a custom wisp server.');
+  window.__pxWispCache = best.url;
+  DB.setMisc('gyro_px_wisp', best.url).catch(()=>{});
 }
 
+// ── Scramjet + BareMux init ──────────────────────────────────
 async function pxInitScramjet() {
   if (pxScramjet) return pxScramjet;
-  if (typeof $scramjetLoadController === 'undefined')
-    throw new Error('Scramjet not loaded yet.');
+  if (typeof $scramjetLoadController === 'undefined') throw new Error('Scramjet not loaded.');
   const { ScramjetController } = $scramjetLoadController();
   pxScramjet = new ScramjetController({
     prefix: pxGetBasePath() + 'scramjet/',
@@ -7287,10 +7309,9 @@ async function pxInitScramjet() {
     }
   });
   try { await pxScramjet.init(); }
-  catch (err) {
+  catch(err) {
     if (/IDBDatabase|object stores/.test(err.message)) {
-      for (const db of ['scramjet-data','scrambase','ScramjetData'])
-        try { indexedDB.deleteDatabase(db); } catch {}
+      for (const d of ['scramjet-data','scrambase','ScramjetData']) try{indexedDB.deleteDatabase(d);}catch{}
       pxScramjet = null; return pxInitScramjet();
     }
     throw err;
@@ -7304,460 +7325,196 @@ async function pxInitConn() {
   if (!BM) throw new Error('BareMux not loaded.');
   const wisp = window.__pxWispCache || PX_DEFAULT_WISP;
   const conn = new BM.BareMuxConnection(pxGetBasePath() + 'bareworker.js');
-  // Hard timeout so a dead server doesn't hang forever
   await Promise.race([
-    conn.setTransport(
-      'https://cdn.jsdelivr.net/npm/@mercuryworkshop/epoxy-transport@2.1.28/dist/index.mjs',
-      [{ wisp }]
-    ),
-    new Promise((_, rej) => setTimeout(() => rej(new Error('Connection timed out — server may be offline.')), 8000))
+    conn.setTransport('https://cdn.jsdelivr.net/npm/@mercuryworkshop/epoxy-transport@2.1.28/dist/index.mjs', [{wisp}]),
+    new Promise((_,rej) => setTimeout(()=>rej(new Error('Connection timed out — server may be offline.')), 8000))
   ]);
   pxConnReady = true;
 }
 
-// ── NEW-TAB SHORTCUTS (stored in IndexedDB via pxSaveShortcuts) ─────
+// ── New-tab page ─────────────────────────────────────────────
 const PX_NT_DEFAULT_SHORTCUTS = [
-  { name:'YouTube',  url:'https://www.youtube.com' },
-  { name:'TikTok',   url:'https://www.tiktok.com'  },
-  { name:'now.gg',   url:'https://now.gg'           },
-  { name:'Reddit',   url:'https://www.reddit.com'  },
+  { label:'YouTube',   url:'https://www.youtube.com'  },
+  { label:'TikTok',    url:'https://www.tiktok.com'   },
+  { label:'now.gg',    url:'https://now.gg'            },
+  { label:'Reddit',    url:'https://www.reddit.com'   },
+  { label:'Discord',   url:'https://discord.com'      },
+  { label:'Instagram', url:'https://instagram.com'    },
 ];
-function pxGetShortcuts() {
-  // read from in-memory cache (populated at proxy boot)
-  return window.__pxShortcutsCache || PX_NT_DEFAULT_SHORTCUTS;
-}
+
+function pxGetShortcuts() { return window.__pxShortcutsCache || PX_NT_DEFAULT_SHORTCUTS; }
 function pxSaveShortcuts(arr) {
   window.__pxShortcutsCache = arr;
   DB.setMisc('gyro_px_shortcuts', JSON.stringify(arr)).catch(()=>{});
 }
 
 function pxMakeNtHtml() {
-  const eng = window.__pxEngineCache || 'duckduckgo';
-  const safeEng = ['duckduckgo','brave'].includes(eng) ? eng : 'duckduckgo';
+  const eng = pxSearchEngine || 'duckduckgo';
+  const engLabel = {duckduckgo:'DuckDuckGo',brave:'Brave Search',google:'Google',bing:'Bing'}[eng] || 'DuckDuckGo';
   const fontKey = window.__pxFontCache || 'google-sans';
   const FONT_MAP = {
     'google-sans': { family:"'Google Sans','Product Sans',system-ui,sans-serif", gfUrl:"https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;600;700;800&display=swap" },
     'inter':       { family:"'Inter',system-ui,sans-serif", gfUrl:"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" },
     'roboto':      { family:"'Roboto',system-ui,sans-serif", gfUrl:"https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" },
     'lato':        { family:"'Lato',system-ui,sans-serif", gfUrl:"https://fonts.googleapis.com/css2?family=Lato:wght@400;700&display=swap" },
-    'merriweather':{ family:"'Merriweather',Georgia,serif", gfUrl:"https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&display=swap" },
     'mono':        { family:"'DM Mono',monospace", gfUrl:"https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap" },
   };
   const font = FONT_MAP[fontKey] || FONT_MAP['google-sans'];
   const shortcuts = pxGetShortcuts();
-  const shortcutsJson = JSON.stringify(shortcuts).replace(/</g,'\\u003c').replace(/>/g,'\\u003e');
-  const engLabel = safeEng === 'brave' ? 'Brave Search' : 'DuckDuckGo';
+  const scHtml = shortcuts.map(sc => {
+    const host = (() => { try { return new URL(sc.url).hostname; } catch { return sc.url.replace(/^https?:\/\//,'').split('/')[0]; } })();
+    return `<div class="sc" onclick="navTo('${sc.url.replace(/'/g,"\\'")}')">
+      <div class="sc-icon"><img src="https://www.google.com/s2/favicons?domain=${host}&sz=64" onerror="this.style.opacity='.2'" alt=""/></div>
+      <span class="sc-label">${sc.label.replace(/</g,'&lt;')}</span>
+    </div>`;
+  }).join('');
 
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>New Tab</title>
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>New Tab</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="${font.gfUrl}" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{--acc:#4f9cf9;--acc2:#6dd5b0;--bg:#0d0f14;--surf:#13161e;--t1:#e8ecf4;--t2:#9ba3bb;--t3:#5c6480;--b0:rgba(255,255,255,.06);--b1:rgba(255,255,255,.10);--b2:rgba(255,255,255,.18);--err:#f87171;--acc-glow:rgba(79,156,249,.22)}
-html{height:100%}
-body{
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  min-height:100%;background:var(--bg);color:var(--t1);
-  font-family:${font.family};
-  background-image:
-    radial-gradient(ellipse 80% 55% at 50% -5%,rgba(79,156,249,.13),transparent),
-    radial-gradient(ellipse 50% 50% at 90% 90%,rgba(109,213,176,.07),transparent),
-    radial-gradient(circle,rgba(255,255,255,.02) 1px,transparent 1px);
-  background-size:auto,auto,28px 28px;
-  animation:none;
-}
-/* Smooth staggered fade-up — no body opacity trick that causes flash */
-@keyframes fade-up{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+:root{--acc:#4f9cf9;--acc2:#6dd5b0;--bg:#0d0f14;--t1:#e8ecf4;--t2:#9ba3bb;--t3:#5c6480;--b1:rgba(255,255,255,.10)}
+html,body{height:100%;background:var(--bg)}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:${font.family};
+  background-image:radial-gradient(ellipse 80% 55% at 50% -5%,rgba(79,156,249,.13),transparent),radial-gradient(ellipse 50% 50% at 90% 90%,rgba(109,213,176,.07),transparent);}
+@keyframes fade-up{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
 @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
-@keyframes ring-spin-o{to{transform:rotate(360deg)}}
-@keyframes ring-spin-m{to{transform:rotate(-360deg)}}
-.logo-wrap{display:flex;flex-direction:column;align-items:center;gap:10px;margin-bottom:32px;opacity:0;animation:fade-up .42s .05s cubic-bezier(.22,1,.36,1) forwards}
+@keyframes ring-o{to{transform:rotate(360deg)}}
+@keyframes ring-m{to{transform:rotate(-360deg)}}
+.logo-wrap{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:28px;opacity:0;animation:fade-up .4s .04s cubic-bezier(.22,1,.36,1) forwards}
 .logo-svg{animation:float 4.5s ease-in-out infinite}
-.ring-o{transform-origin:26px 26px;animation:ring-spin-o 9s linear infinite}
-.ring-m{transform-origin:26px 26px;animation:ring-spin-m 6s linear infinite}
-.ring-i{transform-origin:26px 26px;animation:ring-spin-o 20s linear infinite}
-.logo-text{font-size:1.5rem;font-weight:800;letter-spacing:-.4px;background:linear-gradient(135deg,var(--acc),var(--acc2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-family:${font.family}}
-.logo-sub{font-size:.62rem;color:var(--t3);letter-spacing:.14em;text-transform:uppercase;font-family:${font.family}}
-.search-wrap{width:100%;max-width:520px;padding:0 20px;margin-bottom:28px;opacity:0;animation:fade-up .42s .13s cubic-bezier(.22,1,.36,1) forwards}
-.search-box{
-  display:flex;align-items:center;gap:10px;
-  background:rgba(255,255,255,.04);border:1.5px solid var(--b1);border-radius:18px;padding:11px 16px;
-  cursor:text;transition:border-color .2s,box-shadow .2s,background .2s;
-}
-.search-box:focus-within{border-color:rgba(79,156,249,.5);box-shadow:0 0 0 3px rgba(79,156,249,.09);background:rgba(255,255,255,.055)}
-.search-icon{color:var(--t3);flex-shrink:0;transition:color .2s}
-.search-box:focus-within .search-icon{color:var(--acc)}
-.search-icon svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
-.search-input{flex:1;background:transparent;border:none;outline:none;color:var(--t1);font-size:.97rem;font-family:${font.family};caret-color:var(--acc)}
-.search-input::placeholder{color:var(--t3)}
-.engine-badge{padding:4px 10px;border-radius:8px;background:rgba(79,156,249,.1);border:1px solid rgba(79,156,249,.2);font-size:.68rem;font-weight:700;color:var(--acc);white-space:nowrap;flex-shrink:0;font-family:${font.family};transition:all .2s}
-.search-box:focus-within .engine-badge{background:rgba(79,156,249,.18);border-color:rgba(79,156,249,.4)}
-/* shortcuts grid */
-.shortcuts-section{width:100%;max-width:520px;padding:0 20px;opacity:0;animation:fade-up .42s .21s cubic-bezier(.22,1,.36,1) forwards}
-.shortcuts{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:10px}
-.shortcut{
-  display:flex;flex-direction:column;align-items:center;gap:7px;padding:13px 6px;
-  border-radius:14px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.055);
-  cursor:pointer;user-select:none;position:relative;overflow:hidden;
-  transition:background .2s,border-color .2s,transform .2s cubic-bezier(.34,1.56,.64,1),box-shadow .2s;
-}
-.shortcut::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 80% 60% at 50% 0%,rgba(79,156,249,.13),transparent);opacity:0;transition:opacity .2s}
-.shortcut:hover::before{opacity:1}
-.shortcut:hover{background:rgba(79,156,249,.07);border-color:rgba(79,156,249,.3);transform:translateY(-3px);box-shadow:0 8px 22px rgba(0,0,0,.28)}
-.shortcut:active{transform:translateY(-1px);transition-duration:.08s}
-.shortcut-icon{width:36px;height:36px;border-radius:10px;overflow:hidden;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;transition:transform .2s cubic-bezier(.34,1.56,.64,1)}
-.shortcut:hover .shortcut-icon{transform:scale(1.1)}
-.shortcut-icon img{width:26px;height:26px;object-fit:contain;display:block}
-.shortcut-label{font-size:.6rem;font-weight:600;color:var(--t3);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60px;font-family:${font.family};transition:color .2s}
-.shortcut:hover .shortcut-label{color:var(--t2)}
-/* add shortcut tile */
-.sc-add{
-  display:flex;flex-direction:column;align-items:center;gap:7px;padding:13px 6px;
-  border-radius:14px;border:1.5px dashed rgba(255,255,255,.12);
-  cursor:pointer;user-select:none;transition:border-color .2s,background .2s,transform .2s;
-}
-.sc-add:hover{border-color:rgba(79,156,249,.45);background:rgba(79,156,249,.05);transform:translateY(-2px)}
-.sc-add:active{transform:translateY(0)}
-.sc-add-icon{width:36px;height:36px;border-radius:10px;background:rgba(255,255,255,.05);display:flex;align-items:center;justify-content:center;color:var(--t3);transition:color .2s,background .2s}
-.sc-add:hover .sc-add-icon{background:rgba(79,156,249,.12);color:var(--acc)}
-.sc-add-icon svg{width:16px;height:16px;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;fill:none}
-.sc-add-label{font-size:.6rem;font-weight:600;color:var(--t3);font-family:${font.family};transition:color .2s}
-.sc-add:hover .sc-add-label{color:var(--acc)}
-/* remove button on shortcuts */
-.sc-del{
-  position:absolute;top:4px;right:4px;width:16px;height:16px;
-  border-radius:50%;background:rgba(248,113,113,.18);border:none;
-  color:var(--err);font-size:10px;line-height:1;cursor:pointer;
-  display:none;align-items:center;justify-content:center;
-  transition:background .15s;font-family:sans-serif;
-}
-.shortcut:hover .sc-del{display:flex}
-.sc-del:hover{background:rgba(248,113,113,.38)}
-/* modal */
-.sc-modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);align-items:center;justify-content:center;z-index:999;animation:none}
-.sc-modal-bg.open{display:flex;animation:modal-bg-in .18s ease}
-@keyframes modal-bg-in{from{opacity:0}to{opacity:1}}
-.sc-modal{background:#13161e;border:1px solid rgba(255,255,255,.12);border-radius:18px;padding:24px;width:300px;box-shadow:0 24px 64px rgba(0,0,0,.7);animation:modal-in .22s cubic-bezier(.22,1,.36,1)}
-@keyframes modal-in{from{opacity:0;transform:scale(.94) translateY(8px)}to{opacity:1;transform:none}}
-.sc-modal h3{font-size:.95rem;font-weight:800;color:var(--t1);margin-bottom:18px;font-family:${font.family}}
-.sc-field{margin-bottom:12px}
-.sc-field label{display:block;font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);margin-bottom:5px;font-family:${font.family}}
-.sc-input{width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:9px 12px;color:var(--t1);font-family:${font.family};font-size:.88rem;outline:none;transition:border-color .15s,box-shadow .15s}
-.sc-input:focus{border-color:rgba(79,156,249,.5);box-shadow:0 0 0 3px rgba(79,156,249,.1)}
-.sc-input::placeholder{color:var(--t3)}
-.sc-btns{display:flex;gap:8px;margin-top:18px}
-.sc-btn{flex:1;padding:9px 0;border-radius:10px;font-family:${font.family};font-size:.84rem;font-weight:700;cursor:pointer;border:none;transition:all .15s}
-.sc-btn.primary{background:var(--acc);color:#fff;box-shadow:0 2px 10px rgba(79,156,249,.3)}
-.sc-btn.primary:hover{filter:brightness(1.1);transform:translateY(-1px)}
-.sc-btn.cancel{background:rgba(255,255,255,.07);color:var(--t2);border:1px solid rgba(255,255,255,.1)}
-.sc-btn.cancel:hover{background:rgba(255,255,255,.12);color:var(--t1)}
-.sc-err{font-size:.72rem;color:var(--err);margin-top:6px;min-height:16px;font-family:${font.family}}
+.ring-o{transform-origin:26px 26px;animation:ring-o 9s linear infinite}
+.ring-m{transform-origin:26px 26px;animation:ring-m 6s linear infinite}
+.ring-i{transform-origin:26px 26px;animation:ring-o 20s linear infinite}
+.logo-text{font-size:1.4rem;font-weight:800;letter-spacing:-.4px;background:linear-gradient(135deg,var(--acc),var(--acc2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.logo-sub{font-size:.58rem;color:var(--t3);letter-spacing:.14em;text-transform:uppercase}
+.search-wrap{width:100%;max-width:500px;padding:0 20px;margin-bottom:24px;opacity:0;animation:fade-up .4s .11s cubic-bezier(.22,1,.36,1) forwards}
+.sbox{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.04);border:1.5px solid var(--b1);border-radius:18px;padding:11px 16px;cursor:text;transition:border-color .18s,box-shadow .18s}
+.sbox:focus-within{border-color:rgba(79,156,249,.5);box-shadow:0 0 0 3px rgba(79,156,249,.09)}
+.sicon{color:var(--t3);flex-shrink:0;transition:color .18s}
+.sbox:focus-within .sicon{color:var(--acc)}
+.sicon svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.sinput{flex:1;background:transparent;border:none;outline:none;color:var(--t1);font-size:.95rem;font-family:${font.family};caret-color:var(--acc)}
+.sinput::placeholder{color:var(--t3)}
+.ebadge{padding:3px 9px;border-radius:7px;background:rgba(79,156,249,.1);border:1px solid rgba(79,156,249,.2);font-size:.66rem;font-weight:700;color:var(--acc);white-space:nowrap;flex-shrink:0;font-family:${font.family};transition:all .18s}
+.sbox:focus-within .ebadge{background:rgba(79,156,249,.18);border-color:rgba(79,156,249,.35)}
+.shortcuts{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;width:100%;max-width:500px;padding:0 20px;opacity:0;animation:fade-up .4s .18s cubic-bezier(.22,1,.36,1) forwards}
+.sc{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 6px;border-radius:13px;background:rgba(255,255,255,.028);border:1px solid rgba(255,255,255,.05);cursor:pointer;user-select:none;position:relative;overflow:hidden;transition:background .18s,border-color .18s,transform .18s cubic-bezier(.34,1.56,.64,1),box-shadow .18s}
+.sc::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 80% 60% at 50% 0%,rgba(79,156,249,.13),transparent);opacity:0;transition:opacity .18s}
+.sc:hover::before{opacity:1}
+.sc:hover{background:rgba(79,156,249,.07);border-color:rgba(79,156,249,.3);transform:translateY(-3px);box-shadow:0 8px 20px rgba(0,0,0,.28)}
+.sc:active{transform:translateY(-1px);transition-duration:.07s}
+.sc-icon{width:34px;height:34px;border-radius:9px;overflow:hidden;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;transition:transform .18s cubic-bezier(.34,1.56,.64,1)}
+.sc:hover .sc-icon{transform:scale(1.1)}
+.sc-icon img{width:24px;height:24px;object-fit:contain;display:block}
+.sc-label{font-size:.58rem;font-weight:600;color:var(--t3);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:56px;font-family:${font.family};transition:color .18s}
+.sc:hover .sc-label{color:var(--t2)}
 </style></head><body>
 <div class="logo-wrap">
   <div class="logo-svg">
-    <svg width="56" height="56" viewBox="0 0 52 52" fill="none">
+    <svg width="52" height="52" viewBox="0 0 52 52" fill="none">
       <defs>
-        <linearGradient id="ntg1" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#4f9cf9"/><stop offset="100%" stop-color="#6dd5b0"/></linearGradient>
-        <linearGradient id="ntg2" x1="100%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#6dd5b0"/><stop offset="100%" stop-color="#4f9cf9"/></linearGradient>
+        <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#4f9cf9"/><stop offset="100%" stop-color="#6dd5b0"/></linearGradient>
+        <linearGradient id="g2" x1="100%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#6dd5b0"/><stop offset="100%" stop-color="#4f9cf9"/></linearGradient>
       </defs>
-      <ellipse cx="26" cy="26" rx="22" ry="7.5" stroke="url(#ntg1)" stroke-width="2" fill="none" class="ring-o"/>
-      <ellipse cx="26" cy="26" rx="7.5" ry="22" stroke="url(#ntg2)" stroke-width="2" fill="none" class="ring-m"/>
-      <ellipse cx="26" cy="26" rx="13" ry="13" stroke="url(#ntg1)" stroke-width="1.4" fill="none" stroke-dasharray="5 4" class="ring-i" opacity=".5"/>
-      <circle cx="26" cy="26" r="5" fill="url(#ntg1)"/>
+      <ellipse cx="26" cy="26" rx="22" ry="7.5" stroke="url(#g1)" stroke-width="2" fill="none" class="ring-o"/>
+      <ellipse cx="26" cy="26" rx="7.5" ry="22" stroke="url(#g2)" stroke-width="2" fill="none" class="ring-m"/>
+      <ellipse cx="26" cy="26" rx="13" ry="13" stroke="url(#g1)" stroke-width="1.4" fill="none" stroke-dasharray="5 4" class="ring-i" opacity=".5"/>
+      <circle cx="26" cy="26" r="5" fill="url(#g1)"/>
     </svg>
   </div>
   <div class="logo-text">Gyro Proxy</div>
   <div class="logo-sub">Private Browsing</div>
 </div>
 <div class="search-wrap">
-  <div class="search-box" id="search-box">
-    <span class="search-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
-    <input id="q" class="search-input" placeholder="Search or enter a URL\u2026" autocomplete="off" spellcheck="false" autofocus>
-    <div class="engine-badge">${engLabel}</div>
+  <div class="sbox" id="sbox">
+    <span class="sicon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+    <input id="q" class="sinput" placeholder="Search or enter a URL\u2026" autocomplete="off" spellcheck="false" autofocus>
+    <div class="ebadge">${engLabel}</div>
   </div>
 </div>
-<div class="shortcuts-section">
-  <div class="shortcuts" id="shortcuts-grid"></div>
-</div>
-<!-- Add shortcut modal -->
-<div class="sc-modal-bg" id="sc-modal-bg">
-  <div class="sc-modal">
-    <h3>Add shortcut</h3>
-    <div class="sc-field">
-      <label>Name</label>
-      <input class="sc-input" id="sc-name" placeholder="e.g. YouTube" maxlength="15" autocomplete="off" spellcheck="false"/>
-    </div>
-    <div class="sc-field">
-      <label>URL</label>
-      <input class="sc-input" id="sc-url" placeholder="e.g. https://youtube.com" autocomplete="off" spellcheck="false"/>
-    </div>
-    <div class="sc-err" id="sc-err"></div>
-    <div class="sc-btns">
-      <button class="sc-btn cancel" id="sc-cancel">Cancel</button>
-      <button class="sc-btn primary" id="sc-save">Add</button>
-    </div>
-  </div>
-</div>
+<div class="shortcuts">${scHtml}</div>
 <script>
-var SHORTCUTS = ${shortcutsJson};
-var MAX = 10;
-
-function send(type, url){ try{ if(window.parent&&window.parent!==window){ window.parent.postMessage({type:type,url:url},'*'); return true; } }catch(e){} return false; }
-
 function navTo(url){
-  if(!send('pxNavigate',url)){ window.location.href=url; }
+  try{if(window.parent&&window.parent!==window){window.parent.postMessage({type:'pxNavigate',url:url},'*');return;}}catch(e){}
+  location.href=url;
 }
-
-function getHostname(url){
-  try{ return new URL(url).hostname; }catch(e){ return url.replace(/^https?:\/\//,'').split('/')[0]; }
-}
-
-function renderShortcuts(){
-  var g = document.getElementById('shortcuts-grid');
-  g.innerHTML = '';
-  SHORTCUTS.forEach(function(sc, i){
-    var host = getHostname(sc.url);
-    var el = document.createElement('div');
-    el.className = 'shortcut';
-    el.innerHTML = '<div class="shortcut-icon"><img src="https://www.google.com/s2/favicons?domain='+encodeURIComponent(host)+'&sz=64" onerror="this.style.opacity=\\'0.3\\'" alt=""/></div>'
-      +'<span class="shortcut-label">'+escHtml(sc.name)+'</span>'
-      +'<button class="sc-del" title="Remove">\\u00d7</button>';
-    el.addEventListener('click', function(e){ if(!e.target.classList.contains('sc-del')){ navTo(sc.url); } });
-    el.querySelector('.sc-del').addEventListener('click', function(e){ e.stopPropagation(); removeShortcut(i); });
-    g.appendChild(el);
-  });
-  if(SHORTCUTS.length < MAX){
-    var add = document.createElement('div');
-    add.className = 'sc-add';
-    add.innerHTML = '<div class="sc-add-icon"><svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div><span class="sc-add-label">Add</span>';
-    add.addEventListener('click', openModal);
-    g.appendChild(add);
-  }
-}
-
-function removeShortcut(i){
-  SHORTCUTS.splice(i,1);
-  saveAndSync();
-  renderShortcuts();
-}
-
-function saveAndSync(){
-  // Sync back to parent so next NT blob regeneration picks them up
-  send('pxSaveShortcuts', JSON.stringify(SHORTCUTS));
-}
-
-function openModal(){
-  document.getElementById('sc-name').value='';
-  document.getElementById('sc-url').value='';
-  document.getElementById('sc-err').textContent='';
-  document.getElementById('sc-modal-bg').classList.add('open');
-  setTimeout(function(){ document.getElementById('sc-name').focus(); }, 80);
-}
-function closeModal(){ document.getElementById('sc-modal-bg').classList.remove('open'); }
-
-function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-document.getElementById('sc-cancel').addEventListener('click', closeModal);
-document.getElementById('sc-modal-bg').addEventListener('click', function(e){ if(e.target===this) closeModal(); });
-
-document.getElementById('sc-save').addEventListener('click', function(){
-  var name = document.getElementById('sc-name').value.trim();
-  var url  = document.getElementById('sc-url').value.trim();
-  var err  = document.getElementById('sc-err');
-  err.textContent = '';
-  if(!name){ err.textContent='Enter a name.'; return; }
-  if(!url){ err.textContent='Enter a URL.'; return; }
-  if(!/^https?:\\/\\//.test(url)) url='https://'+url;
-  try{ new URL(url); }catch(e){ err.textContent='That URL looks invalid.'; return; }
-  if(SHORTCUTS.length>=MAX){ err.textContent='Max '+MAX+' shortcuts.'; return; }
-  SHORTCUTS.push({name:name,url:url});
-  saveAndSync();
-  renderShortcuts();
-  closeModal();
-});
-
-// Enter key in modal fields
-['sc-name','sc-url'].forEach(function(id){
-  document.getElementById(id).addEventListener('keydown',function(e){ if(e.key==='Enter') document.getElementById('sc-save').click(); });
-});
-
-// Address-bar-identical search logic — posted to parent which runs pxNavigate
-document.getElementById('q').addEventListener('keydown', function(e){
-  if(e.key !== 'Enter') return;
+document.getElementById('q').addEventListener('keydown',function(e){
+  if(e.key!=='Enter')return;
   e.preventDefault();
-  var v = this.value.trim();
-  if(!v) return;
+  var v=this.value.trim();
+  if(!v)return;
   navTo(v);
-  this.value = '';
+  this.value='';
 });
-
-// Click search box to focus
-document.getElementById('search-box').addEventListener('click', function(){ document.getElementById('q').focus(); });
-
-// animations handled by CSS forwards fill — no JS needed
-
-renderShortcuts();
+document.getElementById('sbox').addEventListener('click',function(){document.getElementById('q').focus();});
+window.addEventListener('message',function(e){
+  if(e.data&&e.data.type==='pxNtRefresh'){ location.reload(); }
+});
 <\/script></body></html>`;
-  return html;
 }
 
-function pxBuildUI() {
-  const mount = document.getElementById('px-mount');
-  mount.innerHTML = `
-    <div id="px-tabs"></div>
-    <div id="px-nav">
-      <button class="px-nav-btn" id="px-back" title="Back">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
-      </button>
-      <button class="px-nav-btn" id="px-fwd" title="Forward">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
-      </button>
-      <button class="px-nav-btn" id="px-reload" title="Reload">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-      </button>
-      <div class="px-addr-wrap" id="px-addr-wrap">
-        <input id="px-addr" autocomplete="off" spellcheck="false" placeholder="Search or enter a URL…">
-        <div class="px-addr-spinner"></div>
-        <button id="px-home-btn" title="New Tab">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-        </button>
-      </div>
-      <button class="px-nav-btn" id="px-server-btn" title="Switch Proxy Server" onclick="pxOpenSettings()">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
-      </button>
-    </div>
-    <div id="px-load-bar-wrap"><div id="px-load-bar"></div></div>
-    <div id="px-frames"></div>`;
-
-  document.getElementById('px-back').onclick = pxNavBack;
-  document.getElementById('px-fwd').onclick  = pxNavFwd;
-  document.getElementById('px-reload').onclick = () => pxGetActive()?.frame.reload();
-  document.getElementById('px-home-btn').onclick = () => pxGoNt(pxGetActive());
-
-  const bar = document.getElementById('px-addr');
-  // Allow full typing — stop propagation so Gyro's global shortcuts don't interfere
-  bar.addEventListener('keydown', e => {
-    e.stopPropagation();
-    if (e.key === 'Enter') { e.preventDefault(); pxNavigate(bar.value.trim()); bar.blur(); }
-    if (e.key === 'Escape') { bar.blur(); pxUpdateAddr(); }
-  });
-  bar.addEventListener('focus', () => bar.select());
-  bar.addEventListener('click', e => e.stopPropagation());
-
-  // Set up message listener BEFORE creating the first tab
-  // so search/navigation from the new-tab srcdoc page works immediately
-  window.addEventListener('message', e => {
-    if (e.data?.type === 'pxNavigate') {
-      const input = (e.data.url || '').trim();
-      if (input) pxNavigate(input);
-    }
-    if (e.data?.type === 'pxSaveShortcuts') {
-      try {
-        const arr = JSON.parse(e.data.url);
-        pxSaveShortcuts(arr);
-        window.__pxNtHtml = pxMakeNtHtml();
-      } catch(err) {}
-    }
-  });
-  pxCreateTab(true);
-}
-
-function pxNavBack() {
-  const t = pxGetActive(); if (!t || t.hi <= 0) return;
-  t._nav = true; t.hi--;
-  t.hist[t.hi] === 'nt' ? pxGoNt(t) : t.frame.go(t.hist[t.hi]);
-  setTimeout(() => { t._nav = false; }, 500);
-}
-function pxNavFwd() {
-  const t = pxGetActive(); if (!t || t.hi >= t.hist.length - 1) return;
-  t._nav = true; t.hi++;
-  t.hist[t.hi] === 'nt' ? pxGoNt(t) : t.frame.go(t.hist[t.hi]);
-  setTimeout(() => { t._nav = false; }, 500);
-}
-function pxGoNt(t) {
-  if (!t) return;
-  t.loading = false;
-  t.title = 'New Tab'; t.url = ''; t.favicon = null;
-  t.frame.frame.srcdoc = window.__pxNtHtml || '';
-  if (t.id === pxActiveId) pxSetLoading(false);
-  pxRenderTabs(); pxUpdateAddr();
-}
-const PX_SEARCH_ENGINES = {
-  duckduckgo: q => `https://duckduckgo.com/?q=${encodeURIComponent(q)}`,
-  brave:      q => `https://search.brave.com/search?q=${encodeURIComponent(q)}`,
-};
-let pxSearchEngine = 'duckduckgo'; // loaded from DB at proxy boot
-// Ensure valid engine
-if (!['duckduckgo','brave'].includes(pxSearchEngine)) pxSearchEngine = 'duckduckgo';
-
+// ── Tab management ───────────────────────────────────────────
 function pxNavigate(input) {
   const t = pxGetActive(); if (!t || !input) return;
-  input = input.trim();
-  if (!input) return;
-  // Resolve to full URL
+  input = input.trim(); if (!input) return;
   if (!/^https?:\/\//.test(input)) {
     const isUrl = /^[a-zA-Z0-9-]+\.[a-z]{2,}([\/:]|$)/.test(input) && !input.includes(' ');
     input = isUrl ? 'https://' + input : (PX_SEARCH_ENGINES[pxSearchEngine] || PX_SEARCH_ENGINES.duckduckgo)(input);
   }
-  // Update state immediately — don't wait for urlchange which may be slow
-  t.url = input;
-  t.loading = true;
-  if (!t._nav) { t.hist = t.hist.slice(0, t.hi + 1); t.hist.push(input); t.hi = t.hist.length - 1; }
+  t.url = input; t.loading = true;
+  if (!t._nav) { t.hist = t.hist.slice(0, t.hi+1); t.hist.push(input); t.hi = t.hist.length-1; }
   try { const h = new URL(input).hostname; t.title = h; t.favicon = `https://www.google.com/s2/favicons?domain=${h}&sz=32`; } catch {}
   pxSetLoading(true); pxSetLoadBar(12);
   pxRenderTabs(); pxUpdateAddr();
   clearTimeout(t._fallT);
-  t._fallT = setTimeout(() => {
-    if (t.loading) { t.loading = false; if (t.id === pxActiveId) { pxSetLoading(false); pxSetLoadBar(100); } pxRenderTabs(); }
-  }, 15000);
+  t._fallT = setTimeout(()=>{ if(t.loading){t.loading=false;if(t.id===pxActiveId){pxSetLoading(false);pxSetLoadBar(100);}pxRenderTabs();} }, 15000);
   t.frame.go(input);
 }
 
-function pxCreateTab(activate = true) {
-  if (pxTabs.length >= 12) return;
-  const frame = pxScramjet.createFrame();
-  const t = {
-    id: pxNextId++, title: 'New Tab', url: '', frame,
-    loading: false, favicon: null,
-    hist: ['nt'], hi: 0, _nav: false, _skipT: null, _fallT: null
-  };
-  // Set srcdoc — no urlchange event fires for srcdoc, load event handles it
-  frame.frame.addEventListener('load', () => pxOnLoad(t));
-  frame.addEventListener('urlchange', e => pxOnUrl(t, e.url));
-  frame.frame.setAttribute('referrerpolicy', 'no-referrer');
-  document.getElementById('px-frames').appendChild(frame.frame);
-  // Set srcdoc AFTER appending so load event fires correctly
-  frame.frame.srcdoc = window.__pxNtHtml || '';
-  pxTabs.push(t);
-  if (activate) pxSwitchTab(t.id);
-  return t;
-}
-
 function pxOnUrl(t, url) {
-  // Ignore srcdoc/blank internal URLs
   if (!url || url === 'about:srcdoc' || url === 'about:blank') return;
   t.url = url;
-  if (!t._nav) { t.hist = t.hist.slice(0, t.hi + 1); t.hist.push(url); t.hi = t.hist.length - 1; }
+  if (!t._nav) { t.hist = t.hist.slice(0, t.hi+1); t.hist.push(url); t.hi = t.hist.length-1; }
   t.loading = true;
   if (t.id === pxActiveId) { pxSetLoading(true); pxUpdateAddr(); }
   try { const h = new URL(url).hostname; t.title = h; t.favicon = `https://www.google.com/s2/favicons?domain=${h}&sz=32`; }
   catch { t.title = 'Browsing'; t.favicon = null; }
   pxRenderTabs(); pxSetLoadBar(15);
   clearTimeout(t._fallT);
-  // 15s timeout before giving up on loading state
-  t._fallT = setTimeout(() => { if(t.loading){t.loading=false;if(t.id===pxActiveId){pxSetLoading(false);pxSetLoadBar(100);}pxRenderTabs();} }, 15000);
+  t._fallT = setTimeout(()=>{ if(t.loading){t.loading=false;if(t.id===pxActiveId){pxSetLoading(false);pxSetLoadBar(100);}pxRenderTabs();} }, 15000);
 }
 
 function pxOnLoad(t) {
   t.loading = false; clearTimeout(t._skipT); clearTimeout(t._fallT);
   if (t.id === pxActiveId) { pxSetLoading(false); pxSetLoadBar(100); }
   try { const title = t.frame.frame.contentWindow.document.title; if(title && title !== 'New Tab') t.title = title; } catch {}
-  // srcdoc new tab: href will be 'about:srcdoc' or blank
-  let href = '';
-  try { href = t.frame.frame.contentWindow?.location?.href || ''; } catch {}
-  if (!href || href === 'about:srcdoc' || href === 'about:blank' || href.includes('NT.html')) {
-    t.title = 'New Tab'; t.url = ''; t.favicon = null;
-  }
+  let href = ''; try { href = t.frame.frame.contentWindow?.location?.href || ''; } catch {}
+  if (!href || href === 'about:srcdoc' || href === 'about:blank') { t.title='New Tab'; t.url=''; t.favicon=null; }
+  pxRenderTabs(); pxUpdateAddr();
+}
+
+function pxCreateTab(activate = true) {
+  if (!pxCanAddTab()) return;
+  const frame = pxScramjet.createFrame();
+  const t = { id:pxNextId++, title:'New Tab', url:'', frame, loading:false, favicon:null,
+               hist:['nt'], hi:0, _nav:false, _skipT:null, _fallT:null };
+  frame.frame.addEventListener('load', () => pxOnLoad(t));
+  frame.addEventListener('urlchange', e => pxOnUrl(t, e.url));
+  frame.frame.setAttribute('referrerpolicy', 'no-referrer');
+  document.getElementById('px-frames').appendChild(frame.frame);
+  frame.frame.srcdoc = window.__pxNtHtml || '';
+  pxTabs.push(t);
+  if (activate) pxSwitchTab(t.id);
+  return t;
+}
+
+function pxGoNt(t) {
+  if (!t) return;
+  t.loading = false; t.title = 'New Tab'; t.url = ''; t.favicon = null;
+  t.frame.frame.srcdoc = window.__pxNtHtml || '';
+  if (t.id === pxActiveId) pxSetLoading(false);
   pxRenderTabs(); pxUpdateAddr();
 }
 
@@ -7769,14 +7526,8 @@ function pxSwitchTab(id) {
   pxRenderTabs(); pxUpdateAddr();
 }
 
-function pxSetLoading(on) {
-  const wrap = document.getElementById('px-addr-wrap');
-  if (wrap) wrap.classList.toggle('loading', on);
-}
-
 function pxCloseTab(id) {
-  const idx = pxTabs.findIndex(t => t.id === id);
-  if (idx === -1) return;
+  const idx = pxTabs.findIndex(t => t.id === id); if (idx === -1) return;
   const t = pxTabs[idx];
   clearTimeout(t._skipT); clearTimeout(t._fallT);
   try { t.frame.frame.src = 'about:blank'; t.frame.frame.remove(); } catch {}
@@ -7788,15 +7539,13 @@ function pxCloseTab(id) {
 }
 
 function pxRenderTabs() {
-  const bar = document.getElementById('px-tabs');
-  if (!bar) return;
+  const bar = document.getElementById('px-tabs'); if (!bar) return;
   bar.innerHTML = '';
   pxTabs.forEach(t => {
     const el = document.createElement('div');
     el.className = 'px-tab' + (t.id === pxActiveId ? ' active' : '');
     el.draggable = true;
-    const icon = t.loading
-      ? `<div class="px-tab-spinner"></div>`
+    const icon = t.loading ? `<div class="px-tab-spinner"></div>`
       : t.favicon ? `<img src="${t.favicon}" class="px-tab-favicon" onerror="this.style.display='none'">` : '';
     el.innerHTML = `${icon}<span class="px-tab-title">${t.title}</span><span class="px-tab-close">&times;</span>`;
     el.onclick = () => pxSwitchTab(t.id);
@@ -7807,17 +7556,20 @@ function pxRenderTabs() {
     el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
     el.addEventListener('drop', e => {
       e.preventDefault(); el.classList.remove('drag-over');
-      if(pxDragSrc===null||pxDragSrc===t.id)return;
+      if (pxDragSrc===null||pxDragSrc===t.id) return;
       const fi=pxTabs.findIndex(x=>x.id===pxDragSrc), ti=pxTabs.findIndex(x=>x.id===t.id);
       if(fi===-1||ti===-1)return;
-      const[m]=pxTabs.splice(fi,1); pxTabs.splice(ti,0,m); pxDragSrc=null; pxRenderTabs();
+      const [mv]=pxTabs.splice(fi,1); pxTabs.splice(ti,0,mv);
+      pxDragSrc=null; pxRenderTabs();
     });
     bar.appendChild(el);
   });
   const btn = document.createElement('button');
-  btn.className = 'px-new-tab'; btn.disabled = pxTabs.length >= 12; btn.title = 'New Tab';
-  btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+  btn.className = 'px-new-tab-btn';
+  btn.title = 'New Tab';
+  btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
   btn.onclick = () => pxCreateTab(true);
+  btn.disabled = !pxCanAddTab();
   bar.appendChild(btn);
 }
 
@@ -7826,134 +7578,267 @@ function pxUpdateAddr() {
   if (bar && t) bar.value = (t.url && t.url !== 'about:srcdoc') ? t.url : '';
 }
 
-// ── SEARCH ENGINE ────────────────────────────────────────────────
+function pxSetLoading(on) {
+  const wrap = document.getElementById('px-addr-wrap');
+  if (wrap) wrap.classList.toggle('loading', on);
+}
+
+function pxSetLoadBar(pct) {
+  const b = document.getElementById('px-load-bar'); if (!b) return;
+  b.style.width = pct + '%'; b.style.opacity = pct === 100 ? '0' : '1';
+  if (pct === 100) setTimeout(()=>{ b.style.width='0%'; }, 250);
+}
+
+// ── Fullscreen ───────────────────────────────────────────────
+let pxFullscreen = false;
+let pxFsHoverTimer = null;
+let pxFsBarVisible = false;
+
+function pxEnterFullscreen() {
+  pxFullscreen = true;
+  const mount = document.getElementById('px-mount');
+  const view = document.getElementById('view-proxy');
+  const gyroNav = document.getElementById('gyro-nav');
+  if (gyroNav) gyroNav.style.display = 'none';
+  mount.classList.add('px-fs');
+  view.classList.add('px-fs-view');
+  document.getElementById('px-fs-btn').innerHTML = pxFsExitIcon();
+  document.getElementById('px-fs-btn').title = 'Exit Fullscreen';
+  // Show the floating bar briefly then hide it
+  pxShowFsBar(true);
+  setTimeout(()=>pxShowFsBar(false), 1800);
+}
+
+function pxExitFullscreen() {
+  pxFullscreen = false;
+  const mount = document.getElementById('px-mount');
+  const view = document.getElementById('view-proxy');
+  const gyroNav = document.getElementById('gyro-nav');
+  if (gyroNav) gyroNav.style.display = '';
+  mount.classList.remove('px-fs');
+  view.classList.remove('px-fs-view');
+  document.getElementById('px-fs-btn').innerHTML = pxFsEnterIcon();
+  document.getElementById('px-fs-btn').title = 'Fullscreen';
+  pxShowFsBar(false);
+  // Restore the normal nav bar
+  const nav = document.getElementById('px-nav');
+  if (nav) { nav.style.transform = ''; nav.style.opacity = ''; nav.style.pointerEvents = ''; }
+}
+
+function pxToggleFullscreen() {
+  if (pxFullscreen) pxExitFullscreen(); else pxEnterFullscreen();
+}
+
+function pxShowFsBar(show) {
+  pxFsBarVisible = show;
+  const nav = document.getElementById('px-nav');
+  if (!nav) return;
+  if (!pxFullscreen) return; // nav is always visible when not fullscreen
+  nav.style.transform  = show ? 'translateY(0)' : 'translateY(-100%)';
+  nav.style.opacity    = show ? '1' : '0';
+  nav.style.pointerEvents = show ? '' : 'none';
+}
+
+function pxFsEnterIcon() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
+}
+function pxFsExitIcon() {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>`;
+}
+
+// Mouse hover at very top of screen while in fullscreen → show bar after 2s
+function pxSetupFsHover() {
+  document.addEventListener('mousemove', e => {
+    if (!pxFullscreen) return;
+    if (e.clientY < 8) {
+      if (!pxFsHoverTimer && !pxFsBarVisible) {
+        pxFsHoverTimer = setTimeout(() => {
+          pxShowFsBar(true);
+          pxFsHoverTimer = null;
+        }, 2000);
+      }
+    } else if (e.clientY > 56) {
+      // Mouse moved away from bar area — hide after short delay
+      clearTimeout(pxFsHoverTimer);
+      pxFsHoverTimer = null;
+      if (pxFsBarVisible) {
+        setTimeout(() => { if (pxFullscreen && pxFsBarVisible) pxShowFsBar(false); }, 700);
+      }
+    }
+  });
+}
+
+// ── Server management ────────────────────────────────────────
+function pxRenderServers() {
+  const list = document.getElementById('px-server-list'); if (!list) return;
+  list.innerHTML = '';
+  const cur = window.__pxWispCache || PX_DEFAULT_WISP;
+  pxAllServers().forEach((s, i) => {
+    const isCustom = i >= PX_WISP_SERVERS.length;
+    const active = s.url === cur;
+    const el = document.createElement('div');
+    el.className = 'px-server-item' + (active ? ' active' : '');
+    el.innerHTML = `
+      <div class="px-server-item-top">
+        <span class="px-server-name">${s.name}${active?' ✓':''}</span>
+        <div class="px-server-right">
+          <span class="px-ping-text" id="px-ping-${i}">…</span>
+          <div class="px-status-dot" id="px-dot-${i}"></div>
+          ${isCustom?`<button class="px-del-btn" onclick="event.stopPropagation();pxDeleteWisp('${s.url}')">✕</button>`:''}
+        </div>
+      </div>
+      <div class="px-server-url">${s.url}</div>`;
+    el.onclick = () => { if (!active) pxSetWisp(s.url); };
+    list.appendChild(el);
+    // Ping
+    pxPing(s.url, 3000).then(r => {
+      const dot = document.getElementById(`px-dot-${i}`);
+      const ping = document.getElementById(`px-ping-${i}`);
+      if (!dot || !ping) return;
+      dot.style.background = r.ok ? 'var(--acc)' : '#f87171';
+      ping.textContent = r.ok ? r.ms + 'ms' : 'offline';
+      ping.style.color = r.ok ? 'var(--acc)' : '#f87171';
+    });
+  });
+}
+
+function pxSetWisp(url) {
+  window.__pxWispCache = url;
+  DB.setMisc('gyro_px_wisp', url).catch(()=>{});
+  pxConnReady = false; // force reconnect
+  proxyBooted = false;
+  toast('Switching server…', 1500);
+  setTimeout(() => proxyInit(), 400);
+}
+
+window.pxDeleteWisp = function(url) {
+  if (!confirm('Remove this custom server?')) return;
+  const updated = pxGetCustomWisps().filter(w => w.url !== url);
+  window.__pxCustomWisps = updated;
+  DB.setMisc('gyro_px_custom_wisps', JSON.stringify(updated)).catch(()=>{});
+  if ((window.__pxWispCache || PX_DEFAULT_WISP) === url) pxSetWisp(PX_DEFAULT_WISP);
+  else pxRenderServers();
+};
+
+window.pxAddCustomWisp = function() {
+  const inp = document.getElementById('px-custom-input'); if (!inp) return;
+  const url = inp.value.trim(); if (!url) return;
+  if (!url.startsWith('ws://') && !url.startsWith('wss://')) { toast('URL must start with wss://', 2500); return; }
+  const stored = pxGetCustomWisps();
+  if ([...PX_WISP_SERVERS, ...stored].some(w => w.url === url)) { toast('Server already added', 2000); return; }
+  stored.push({ name: 'Custom ' + (stored.length + 1), url });
+  window.__pxCustomWisps = stored;
+  DB.setMisc('gyro_px_custom_wisps', JSON.stringify(stored)).catch(()=>{});
+  pxSetWisp(url);
+  inp.value = '';
+};
+
+// ── Search engine ────────────────────────────────────────────
 function pxRenderEngines() {
   const grid = document.getElementById('px-engine-grid'); if (!grid) return;
   grid.querySelectorAll('.px-engine-pill').forEach(btn => {
-    const eng = btn.dataset.engine;
-    btn.classList.toggle('active', eng === pxSearchEngine);
+    btn.classList.toggle('active', btn.dataset.engine === pxSearchEngine);
     btn.onclick = () => {
-      pxSearchEngine = eng; DB.setMisc('gyro_px_engine', eng).catch(()=>{});
-      pxRenderEngines();
-      // Revoke old blob and create fresh one with new engine baked in
+      pxSearchEngine = btn.dataset.engine;
+      DB.setMisc('gyro_px_engine', pxSearchEngine).catch(()=>{});
       window.__pxNtHtml = pxMakeNtHtml();
-      // Reload every tab that is on the new-tab page
-      pxTabs.forEach(t => {
-        if (!t.frame || !t.frame.frame) return;
-        if (!t.url || t.title === 'New Tab') {
-          t.frame.frame.srcdoc = window.__pxNtHtml || '';
-          t.url = '';
-        }
-      });
+      pxTabs.forEach(t => { if (!t.url || t.title==='New Tab') { t.frame.frame.srcdoc = window.__pxNtHtml; t.url=''; } });
+      pxRenderEngines();
     };
   });
 }
 
-// ── SETTINGS (server list) ────────────────────────────────────────
+// ── Main settings open (used by toolbar gear button) ─────────
 function pxOpenSettings() {
-  // If proxy UI is active, open main settings on the proxy tab
-  if (document.getElementById('px-server-list')) {
+  if (typeof openSettings === 'function') {
     openSettings();
     setTimeout(() => {
       const btn = document.querySelector('.modal-nav-item[data-tab="proxy"]');
       if (btn) btn.click();
     }, 60);
-  } else {
-    // Proxy hasn't booted — open main settings anyway
-    openSettings();
   }
 }
 
-function pxSetLoadBar(pct) {
-  const b = document.getElementById('px-load-bar'); if(!b) return;
-  b.style.width = pct + '%'; b.style.opacity = pct===100?'0':'1';
-  if (pct===100) setTimeout(()=>{b.style.width='0%';},250);
-}
-
-// ── SETTINGS SERVER LIST ──────────────────────────────────────────
-
-function pxRenderServers() {
-  const list = document.getElementById('px-server-list'); list.innerHTML = '';
-  const cur = window.__pxWispCache || PX_DEFAULT_WISP;
-  pxAllServers().forEach((s, i) => {
-    const isCustom = i >= PX_WISP_SERVERS.length;
-    const el = document.createElement('div');
-    el.className = 'px-server-item' + (s.url===cur?' active':'');
-    el.innerHTML = `
-      <div class="px-server-item-top">
-        <span class="px-server-name">${s.name}${s.url===cur?' ✓':''}</span>
-        <div class="px-server-right">
-          <span class="px-ping-text">…</span>
-          <div class="px-status-dot"></div>
-          ${isCustom?`<button class="px-del-btn" onclick="event.stopPropagation();pxDeleteWisp('${s.url}')">✕</button>`:''}
+// ── Build UI ─────────────────────────────────────────────────
+function pxBuildUI() {
+  const mount = document.getElementById('px-mount');
+  mount.innerHTML = `
+    <div id="px-nav" style="display:flex;flex-direction:column;background:var(--surf);border-bottom:1px solid var(--b1);transition:transform .22s cubic-bezier(.4,0,.2,1),opacity .22s ease;z-index:10;position:relative">
+      <div id="px-tabs" style="display:flex;align-items:center;padding:4px 6px 0;gap:4px;overflow-x:auto;min-height:36px;scrollbar-width:none"></div>
+      <div style="display:flex;align-items:center;gap:6px;padding:5px 8px">
+        <button class="px-nav-btn" id="px-back-btn" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke="currentColor"><polyline points="15 18 9 12 15 6"/></svg></button>
+        <button class="px-nav-btn" id="px-fwd-btn"  title="Forward"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke="currentColor"><polyline points="9 18 15 12 9 6"/></svg></button>
+        <button class="px-nav-btn" id="px-reload-btn" title="Reload"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke="currentColor"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+        <div class="px-addr-wrap" id="px-addr-wrap">
+          <input id="px-addr" autocomplete="off" spellcheck="false" placeholder="Search or enter a URL\u2026">
+          <div class="px-addr-spinner"></div>
+          <button class="px-addr-inner-btn" id="px-home-btn" title="New Tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          </button>
         </div>
+        <button class="px-nav-btn" id="px-server-btn" title="Proxy Settings" onclick="pxOpenSettings()">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+        </button>
+        <button class="px-nav-btn" id="px-fs-btn" title="Fullscreen" onclick="pxToggleFullscreen()">${pxFsEnterIcon()}</button>
       </div>
-      <div class="px-server-url">${s.url}</div>`;
-    el.onclick = () => pxSetWisp(s.url);
-    list.appendChild(el);
-    pxPing(s.url, 2000).then(r => {
-      const dot = el.querySelector('.px-status-dot'), ping = el.querySelector('.px-ping-text');
-      dot.classList.toggle('ok', r.ok); dot.classList.toggle('bad', !r.ok);
-      ping.textContent = r.ok ? r.ms+'ms' : 'Offline';
-    });
+      <div class="px-load-bar-wrap"><div id="px-load-bar" class="px-load-bar"></div></div>
+    </div>
+    <div id="px-frames" style="flex:1;position:relative;overflow:hidden;min-height:0"></div>`;
+
+  const bar = document.getElementById('px-addr');
+  bar.addEventListener('keydown', e => { if(e.key==='Enter'){e.preventDefault();pxNavigate(bar.value.trim());bar.blur();} });
+  bar.addEventListener('focus', () => bar.select());
+  document.getElementById('px-back-btn').onclick = () => {
+    const t = pxGetActive(); if(!t||t.hi<=0) return;
+    t._nav=true; t.hi--;
+    const tgt = t.hist[t.hi];
+    if (tgt==='nt') pxGoNt(t); else t.frame.go(tgt);
+    setTimeout(()=>{t._nav=false;},500);
+  };
+  document.getElementById('px-fwd-btn').onclick = () => {
+    const t = pxGetActive(); if(!t||t.hi>=t.hist.length-1) return;
+    t._nav=true; t.hi++;
+    const tgt = t.hist[t.hi];
+    if (tgt==='nt') pxGoNt(t); else t.frame.go(tgt);
+    setTimeout(()=>{t._nav=false;},500);
+  };
+  document.getElementById('px-reload-btn').onclick = () => pxGetActive()?.frame.reload();
+  document.getElementById('px-home-btn').onclick = () => pxGoNt(pxGetActive());
+
+  window.addEventListener('message', e => {
+    if (e.data?.type === 'pxNavigate') { const v = (e.data.url||'').trim(); if(v) pxNavigate(v); }
+    if (e.data?.type === 'pxSaveShortcuts') {
+      try { pxSaveShortcuts(JSON.parse(e.data.url)); window.__pxNtHtml = pxMakeNtHtml(); } catch {}
+    }
   });
+
+  pxSetupFsHover();
+  pxCreateTab(true);
 }
 
-function pxAddCustomWisp() {
-  const inp = document.getElementById('px-custom-input'), url = inp.value.trim();
-  if (!url) return;
-  if (!url.startsWith('ws://') && !url.startsWith('wss://')) { toast('URL must start with wss://',2500); return; }
-  const stored = pxGetStoredWisps();
-  if ([...PX_WISP_SERVERS,...stored].some(w=>w.url===url)) { toast('Server already added',2000); return; }
-  stored.push({ name:'Custom '+(stored.length+1), url });
-  window.__pxWispsCache = stored; DB.setMisc('gyro_px_wisps', JSON.stringify(stored)).catch(()=>{});
-  pxSetWisp(url); inp.value='';
-}
-
-window.pxDeleteWisp = function(url) {
-  if (!confirm('Remove this server?')) return;
-  const updated = pxGetStoredWisps().filter(w=>w.url!==url);
-  window.__pxWispsCache = updated; DB.setMisc('gyro_px_wisps', JSON.stringify(updated)).catch(()=>{});
-  if ((window.__pxWispCache||PX_DEFAULT_WISP)===url) pxSetWisp(PX_DEFAULT_WISP);
-  else pxRenderServers();
-};
-
-function pxSetWisp(url) {
-  window.__pxWispCache = url; DB.setMisc('gyro_px_wisp', url).catch(()=>{});
-  navigator.serviceWorker.controller?.postMessage({ type:'config', wispurl: url });
-  document.getElementById('px-modal-backdrop').style.display = 'none';
-  toast('Switching proxy server…', 2000);
-  setTimeout(() => location.reload(), 800);
-}
-
-// ── INIT ───────────────────────────────────────────────────────────
+// ── Main init ────────────────────────────────────────────────
 async function proxyInit() {
-  // Load all proxy/misc data from IndexedDB into in-memory caches
+  // Load all DB caches
   try {
-    const [eng, wisps, wisp, shortcuts, font] = await Promise.all([
+    const [eng, customWisps, wisp, shortcuts, font] = await Promise.all([
       DB.getMisc('gyro_px_engine'),
-      DB.getMisc('gyro_px_wisps'),
+      DB.getMisc('gyro_px_custom_wisps'),
       DB.getMisc('gyro_px_wisp'),
       DB.getMisc('gyro_px_shortcuts'),
       DB.getMisc('gyro_font'),
     ]);
-    if (eng) { pxSearchEngine = eng; window.__pxEngineCache = eng; }
-    else window.__pxEngineCache = 'duckduckgo';
-    window.__pxWispsCache = wisps ? JSON.parse(wisps) : [];
-    // Clear cached wisp if it was one of the old dead servers
-    const _deadServers = ['wss://glseries.net/wisp/', 'wss://wispserver.dev/wisp/', 'wss://seminar.drama.english.assignment.literature.homebrewer.org/wisp/', 'wss://scram.owoellen.rocks/wisp/'];
-    window.__pxWispCache = (wisp && !_deadServers.includes(wisp)) ? wisp : null;
-    window.__pxShortcutsCache = shortcuts ? JSON.parse(shortcuts) : null;
+    if (eng) pxSearchEngine = eng;
+    window.__pxCustomWisps = customWisps ? JSON.parse(customWisps) : [];
     window.__pxFontCache = font || 'google-sans';
+    window.__pxShortcutsCache = shortcuts ? JSON.parse(shortcuts) : null;
+    // Dead-server guard
+    const _dead = ['wss://glseries.net/wisp/','wss://wispserver.dev/wisp/','wss://scram.owoellen.rocks/wisp/'];
+    window.__pxWispCache = (wisp && !_dead.includes(wisp)) ? wisp : null;
   } catch(e) {
-    window.__pxEngineCache = 'duckduckgo';
-    window.__pxWispsCache = [];
-    window.__pxWispCache = null;
-    window.__pxShortcutsCache = null;
-    window.__pxFontCache = 'google-sans';
+    window.__pxCustomWisps = []; window.__pxFontCache = 'google-sans';
+    window.__pxShortcutsCache = null; window.__pxWispCache = null;
   }
 
-  // File:// check
   if (location.protocol === 'file:') {
     document.getElementById('px-file-error').style.display = 'flex';
     document.getElementById('px-mount').style.display = 'none';
@@ -7961,39 +7846,41 @@ async function proxyInit() {
   }
 
   const mount = document.getElementById('px-mount');
-  const steps = [
-    { id:'pxs1', label:'Loading proxy engine' },
-    { id:'pxs2', label:'Selecting fastest server' },
-    { id:'pxs3', label:'Opening transport' },
-    { id:'pxs4', label:'Registering service worker' },
-  ];
+  if (!mount) return;
 
+  // Init steps UI
   mount.innerHTML = `
-    <div id="px-init">
-      <div class="px-init-card">
-        <div class="px-init-icon">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
-            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-          </svg>
-        </div>
-        <div class="px-init-title">Gyro Proxy</div>
-        <div class="px-init-sub">Setting up your connection…</div>
-        <div class="px-init-steps">
-          ${steps.map(s=>`<div class="px-step" id="${s.id}"><div class="px-step-icon">○</div>${s.label}</div>`).join('')}
-        </div>
-        <div class="px-init-prog-wrap"><div id="px-init-bar"></div></div>
+    <div style="display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:20px;background:var(--bg)">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;margin-bottom:8px">
+        <svg width="40" height="40" viewBox="0 0 52 52" fill="none">
+          <defs><linearGradient id="pxig" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#4f9cf9"/><stop offset="100%" stop-color="#6dd5b0"/></linearGradient></defs>
+          <ellipse cx="26" cy="26" rx="22" ry="7.5" stroke="url(#pxig)" stroke-width="2" fill="none" style="transform-origin:26px 26px;animation:ring-spin-o 9s linear infinite"/>
+          <ellipse cx="26" cy="26" rx="7.5" ry="22" stroke="url(#pxig)" stroke-width="2" fill="none" style="transform-origin:26px 26px;animation:ring-spin-m 6s linear infinite"/>
+          <circle cx="26" cy="26" r="5" fill="url(#pxig)"/>
+        </svg>
+        <div style="font-size:.9rem;font-weight:700;color:var(--t1);letter-spacing:-.2px">Starting Gyro Proxy</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;width:260px" id="px-steps">
+        ${['pxs1','pxs2','pxs3','pxs4'].map((id,i)=>
+          `<div class="px-step" id="${id}">
+            <span class="px-step-icon">○</span>
+            <span class="px-step-text">${['Loading scripts','Finding best server','Connecting','Service worker'][i]}</span>
+          </div>`).join('')}
+      </div>
+      <div style="width:260px;height:2px;background:var(--elev);border-radius:1px;overflow:hidden">
+        <div id="px-init-bar" style="height:100%;background:var(--acc);width:0%;transition:width .3s ease;border-radius:1px"></div>
       </div>
     </div>`;
 
   const mark = (id, state) => {
-    const row = document.getElementById(id); if(!row) return;
+    const row = document.getElementById(id); if (!row) return;
     const icon = row.querySelector('.px-step-icon');
-    const bar  = document.getElementById('px-init-bar');
-    const idx  = steps.findIndex(s=>s.id===id);
+    const bar = document.getElementById('px-init-bar');
+    const steps = ['pxs1','pxs2','pxs3','pxs4'];
+    const idx = steps.indexOf(id);
     row.className = 'px-step ' + state;
-    if (state==='active'){ icon.textContent='◌'; if(bar)bar.style.width=((idx/steps.length)*100)+'%'; }
-    if (state==='done')  { icon.textContent='✓'; if(bar)bar.style.width=(((idx+1)/steps.length)*100)+'%'; }
+    if (state==='active') { icon.textContent='◌'; if(bar) bar.style.width=((idx/steps.length)*100)+'%'; }
+    if (state==='done')   { icon.textContent='✓'; if(bar) bar.style.width=(((idx+1)/steps.length)*100)+'%'; }
   };
 
   window.__pxNtHtml = pxMakeNtHtml();
@@ -8004,6 +7891,9 @@ async function proxyInit() {
     mark('pxs1','done');
 
     mark('pxs2','active');
+    await pxFetchWispServers();
+    // If no cached wisp yet, set it to the fetched default
+    if (!window.__pxWispCache) window.__pxWispCache = PX_DEFAULT_WISP;
     await pxPickBestServer();
     mark('pxs2','done');
 
@@ -8021,31 +7911,31 @@ async function proxyInit() {
       const send = () => (reg.active || navigator.serviceWorker.controller)?.postMessage(cfg);
       send(); setTimeout(send, 500); setTimeout(send, 1500);
       navigator.serviceWorker.addEventListener('message', e => {
-        if (e.data?.type==='wispChanged') { window.__pxWispCache = e.data.url; DB.setMisc('gyro_px_wisp', e.data.url).catch(()=>{}); toast('Proxy auto-switched to faster server',2500); }
+        if (e.data?.type==='wispChanged') { window.__pxWispCache = e.data.url; DB.setMisc('gyro_px_wisp', e.data.url).catch(()=>{}); toast('Proxy auto-switched to faster server', 2500); }
       });
       reg.update();
       mark('pxs4','done');
     }
 
+    proxyBooted = true;
     pxBuildUI();
-  } catch (err) {
+  } catch(err) {
     console.error('[Gyro Proxy] Init failed:', err);
-    // Build server options for the error screen
-    const _allS = pxAllServers();
-    const _serverOpts = _allS.map(s =>
+    const allS = pxAllServers();
+    const serverBtns = allS.map(s =>
       `<button onclick="window.__pxWispCache='${s.url}';pxConnReady=false;DB.setMisc('gyro_px_wisp','${s.url}').catch(()=>{});proxyBooted=false;proxyInit()"
-        style="padding:7px 14px;background:var(--elev);border:1.5px solid var(--b1);border-radius:10px;color:var(--t2);font-family:var(--font);font-size:.82rem;font-weight:600;cursor:pointer;text-align:left;transition:all .18s;display:flex;align-items:center;gap:8px;width:100%"
+        style="padding:8px 14px;background:var(--elev);border:1.5px solid var(--b1);border-radius:10px;color:var(--t2);font-family:var(--font);font-size:.82rem;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:space-between;width:100%;gap:8px;transition:all .15s"
         onmouseover="this.style.borderColor='var(--acc)';this.style.color='var(--t1)';this.style.background='rgba(79,156,249,.07)'"
         onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)';this.style.background='var(--elev)'"
-      ><span style="flex:1">${s.name}</span><span style="opacity:.4;font-size:.7rem;font-weight:400">${s.url.replace('wss://','').replace('/wisp/','').slice(0,22)}</span></button>`
+      ><span>${s.name}</span><span style="opacity:.4;font-size:.7rem;font-weight:400">${s.url.replace('wss://','').replace('/wisp/','').slice(0,24)}</span></button>`
     ).join('');
     mount.innerHTML = `
-      <div style="display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:40px;text-align:center;background:var(--bg)">
+      <div style="display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:40px;text-align:center;background:var(--bg)">
         <div style="font-size:2rem">⚠️</div>
         <div style="font-size:1rem;font-weight:700;color:var(--t1)">Proxy Failed to Start</div>
         <div style="font-size:.84rem;color:var(--t2);max-width:380px;line-height:1.7">${err.message||'Connection failed — the wisp server may be offline.'}</div>
-        <div style="font-size:.8rem;font-weight:700;color:var(--t3);letter-spacing:.06em;text-transform:uppercase;margin-top:4px">Try a different server</div>
-        <div style="display:flex;flex-direction:column;gap:6px;width:100%;max-width:340px;text-align:left">${_serverOpts}</div>
+        <div style="font-size:.75rem;font-weight:700;color:var(--t3);letter-spacing:.06em;text-transform:uppercase;margin-top:2px">Try a different server</div>
+        <div style="display:flex;flex-direction:column;gap:7px;width:100%;max-width:320px">${serverBtns}</div>
         <div style="display:flex;gap:10px;margin-top:4px">
           <button onclick="pxConnReady=false;proxyBooted=false;proxyInit()" style="padding:9px 24px;background:var(--acc);border:none;border-radius:10px;color:#fff;font-family:var(--font);font-size:.84rem;font-weight:700;cursor:pointer">Retry</button>
         </div>
