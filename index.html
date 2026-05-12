@@ -5519,10 +5519,11 @@ function openSettings(){
   document.getElementById('permTimeToggle').checked=permTime;
   document.getElementById('permBatteryToggle').checked=permBattery;
   document.getElementById('permDeviceToggle').checked=permDevice;
-  // Proxy tab
-  pxRenderEngines();
-  pxRenderServers();
-  document.getElementById('px-custom-add').onclick = pxAddCustomWisp;
+  // Proxy tab — only render if proxy UI exists
+  if (typeof pxRenderEngines === 'function' && document.getElementById('px-engine-grid')) pxRenderEngines();
+  if (typeof pxRenderServers === 'function' && document.getElementById('px-server-list')) pxRenderServers();
+  const _pcaBtn = document.getElementById('px-custom-add');
+  if (_pcaBtn && typeof pxAddCustomWisp === 'function') _pcaBtn.onclick = pxAddCustomWisp;
   updateProfilePreview();applyColor(currentColor);applyFont(currentFont);applyFavicon(faviconChoice,faviconCustomUrl);
   renderCustomFaviconGrid();
   renderTypewriterPhraseList();
@@ -7256,11 +7257,20 @@ async function pxPing(url, timeout = 2500) {
 async function pxPickBestServer() {
   const cur = window.__pxWispCache || PX_DEFAULT_WISP;
   const all = pxAllServers();
-  const curOk = await pxPing(cur, 1800);
+  // First try the currently cached server
+  const curOk = await pxPing(cur, 2500);
   if (curOk.ok) return;
-  const results = await Promise.all(all.map(s => pxPing(s.url, 1800)));
-  const best = results.filter(r => r.ok).sort((a, b) => a.ms - b.ms)[0];
-  if (best && best.url !== cur) { window.__pxWispCache = best.url; DB.setMisc('gyro_px_wisp', best.url).catch(()=>{}); }
+  // Try all servers in parallel
+  const results = await Promise.all(all.map(s => pxPing(s.url, 3000)));
+  const working = results.filter(r => r.ok).sort((a, b) => a.ms - b.ms);
+  if (working.length === 0) {
+    throw new Error('All proxy servers are offline. Try adding a custom wisp server.');
+  }
+  const best = working[0];
+  if (best.url !== cur) {
+    window.__pxWispCache = best.url;
+    DB.setMisc('gyro_px_wisp', best.url).catch(()=>{});
+  }
 }
 
 async function pxInitScramjet() {
@@ -7294,10 +7304,14 @@ async function pxInitConn() {
   if (!BM) throw new Error('BareMux not loaded.');
   const wisp = window.__pxWispCache || PX_DEFAULT_WISP;
   const conn = new BM.BareMuxConnection(pxGetBasePath() + 'bareworker.js');
-  await conn.setTransport(
-    'https://cdn.jsdelivr.net/npm/@mercuryworkshop/epoxy-transport@2.1.28/dist/index.mjs',
-    [{ wisp }]
-  );
+  // Hard timeout so a dead server doesn't hang forever
+  await Promise.race([
+    conn.setTransport(
+      'https://cdn.jsdelivr.net/npm/@mercuryworkshop/epoxy-transport@2.1.28/dist/index.mjs',
+      [{ wisp }]
+    ),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('Connection timed out — server may be offline.')), 8000))
+  ]);
   pxConnReady = true;
 }
 
@@ -7679,11 +7693,23 @@ if (!['duckduckgo','brave'].includes(pxSearchEngine)) pxSearchEngine = 'duckduck
 function pxNavigate(input) {
   const t = pxGetActive(); if (!t || !input) return;
   input = input.trim();
-  if (!input.startsWith('http')) {
-    const isUrl = /\.[a-z]{2,}(\/|$)/i.test(input) && !input.includes(' ');
-    input = isUrl ? 'https://'+input : (PX_SEARCH_ENGINES[pxSearchEngine]||PX_SEARCH_ENGINES.duckduckgo)(input);
+  if (!input) return;
+  // Resolve to full URL
+  if (!/^https?:\/\//.test(input)) {
+    const isUrl = /^[a-zA-Z0-9-]+\.[a-z]{2,}([\/:]|$)/.test(input) && !input.includes(' ');
+    input = isUrl ? 'https://' + input : (PX_SEARCH_ENGINES[pxSearchEngine] || PX_SEARCH_ENGINES.duckduckgo)(input);
   }
-  t.loading = true; pxSetLoading(true); pxSetLoadBar(12);
+  // Update state immediately — don't wait for urlchange which may be slow
+  t.url = input;
+  t.loading = true;
+  if (!t._nav) { t.hist = t.hist.slice(0, t.hi + 1); t.hist.push(input); t.hi = t.hist.length - 1; }
+  try { const h = new URL(input).hostname; t.title = h; t.favicon = `https://www.google.com/s2/favicons?domain=${h}&sz=32`; } catch {}
+  pxSetLoading(true); pxSetLoadBar(12);
+  pxRenderTabs(); pxUpdateAddr();
+  clearTimeout(t._fallT);
+  t._fallT = setTimeout(() => {
+    if (t.loading) { t.loading = false; if (t.id === pxActiveId) { pxSetLoading(false); pxSetLoadBar(100); } pxRenderTabs(); }
+  }, 15000);
   t.frame.go(input);
 }
 
@@ -7807,7 +7833,6 @@ function pxRenderEngines() {
     const eng = btn.dataset.engine;
     btn.classList.toggle('active', eng === pxSearchEngine);
     btn.onclick = () => {
-      pxSearchEngine = eng;
       pxSearchEngine = eng; DB.setMisc('gyro_px_engine', eng).catch(()=>{});
       pxRenderEngines();
       // Revoke old blob and create fresh one with new engine baked in
@@ -7826,11 +7851,17 @@ function pxRenderEngines() {
 
 // ── SETTINGS (server list) ────────────────────────────────────────
 function pxOpenSettings() {
-  openSettings();
-  setTimeout(() => {
-    const btn = document.querySelector('.modal-nav-item[data-tab="proxy"]');
-    if (btn) btn.click();
-  }, 60);
+  // If proxy UI is active, open main settings on the proxy tab
+  if (document.getElementById('px-server-list')) {
+    openSettings();
+    setTimeout(() => {
+      const btn = document.querySelector('.modal-nav-item[data-tab="proxy"]');
+      if (btn) btn.click();
+    }, 60);
+  } else {
+    // Proxy hasn't booted — open main settings anyway
+    openSettings();
+  }
 }
 
 function pxSetLoadBar(pct) {
@@ -8002,11 +8033,11 @@ async function proxyInit() {
     // Build server options for the error screen
     const _allS = pxAllServers();
     const _serverOpts = _allS.map(s =>
-      `<button onclick="window.__pxWispCache='${s.url}';DB.setMisc('gyro_px_wisp','${s.url}').catch(()=>{});proxyBooted=false;proxyInit()"
-        style="padding:7px 14px;background:var(--elev);border:1px solid var(--b1);border-radius:8px;color:var(--t2);font-family:var(--font);font-size:.78rem;cursor:pointer;text-align:left;transition:all .15s"
-        onmouseover="this.style.borderColor='var(--acc)';this.style.color='var(--t1)'"
-        onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)'"
-      >${s.name} <span style="opacity:.5;font-size:.7rem">${s.url.replace('wss://','').slice(0,28)}…</span></button>`
+      `<button onclick="window.__pxWispCache='${s.url}';pxConnReady=false;DB.setMisc('gyro_px_wisp','${s.url}').catch(()=>{});proxyBooted=false;proxyInit()"
+        style="padding:7px 14px;background:var(--elev);border:1.5px solid var(--b1);border-radius:10px;color:var(--t2);font-family:var(--font);font-size:.82rem;font-weight:600;cursor:pointer;text-align:left;transition:all .18s;display:flex;align-items:center;gap:8px;width:100%"
+        onmouseover="this.style.borderColor='var(--acc)';this.style.color='var(--t1)';this.style.background='rgba(79,156,249,.07)'"
+        onmouseout="this.style.borderColor='var(--b1)';this.style.color='var(--t2)';this.style.background='var(--elev)'"
+      ><span style="flex:1">${s.name}</span><span style="opacity:.4;font-size:.7rem;font-weight:400">${s.url.replace('wss://','').replace('/wisp/','').slice(0,22)}</span></button>`
     ).join('');
     mount.innerHTML = `
       <div style="display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:40px;text-align:center;background:var(--bg)">
@@ -8016,7 +8047,7 @@ async function proxyInit() {
         <div style="font-size:.8rem;font-weight:700;color:var(--t3);letter-spacing:.06em;text-transform:uppercase;margin-top:4px">Try a different server</div>
         <div style="display:flex;flex-direction:column;gap:6px;width:100%;max-width:340px;text-align:left">${_serverOpts}</div>
         <div style="display:flex;gap:10px;margin-top:4px">
-          <button onclick="proxyBooted=false;proxyInit()" style="padding:9px 24px;background:var(--acc);border:none;border-radius:10px;color:#fff;font-family:var(--font);font-size:.84rem;font-weight:700;cursor:pointer">Retry</button>
+          <button onclick="pxConnReady=false;proxyBooted=false;proxyInit()" style="padding:9px 24px;background:var(--acc);border:none;border-radius:10px;color:#fff;font-family:var(--font);font-size:.84rem;font-weight:700;cursor:pointer">Retry</button>
         </div>
       </div>`;
   }
